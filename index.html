@@ -171,17 +171,35 @@ const FREEWAYS = [
     pts: [[248,612],[366,584],[494,558],[596,536]] },
 ];
 
-// ── Tuning ──────────────────────────────────────────────────
-const SPEED = 18;
-const BASE_DWELL = 0.4;
+// ── Tuning (grounded in real BART operating figures) ────────
+const SPEED = 18;               // px per sim-minute (~35 mph average incl. stops)
+const BASE_DWELL = 0.33;        // 20-second base station stop
+const DWELL_PER_100 = 0.22;     // extra minutes per 100 riders boarding/alighting
+const MAX_DWELL = 2.2;          // even a mob clears eventually
 const CAP_PER_CAR = 140;
 const BASE_FARE = 4.25;
 const BASE_COST_PER_CAR_MIN = 1.15;
 const OVERHEAD_PER_MIN = 150;
 const ALIGHT_FRAC = 0.16;
-const TRANSFER_FRAC = 0.35;     // share of alighters at a hub who re-enter the platform
-const TRAIN_GAP = 16;           // min px separation before a train holds
+const TRANSFER_FRAC = 0.35;
+const TRAIN_GAP = 16;
 const START_TREASURY = 500000;
+
+// Fleet: BART's roster is ~1,070 cars, but ~90 sit in repair/maintenance at any
+// time and a reserve is held back for recovery. What's left is what you can run.
+const FLEET_TOTAL = 1070;
+const FLEET_MAINTENANCE = 90;
+const FLEET_RESERVE = 40;
+const FLEET_AVAILABLE = FLEET_TOTAL - FLEET_MAINTENANCE - FLEET_RESERVE; // 940
+
+// Terminal turnaround: a train that finishes its run must be inspected, changed
+// ends, and laid over before those cars can go out again.
+const TURNAROUND_MIN = 11;
+
+// The Transbay Tube is the binding constraint on the whole system: 24 trains per
+// hour per direction is the hard ceiling with today's train control.
+const TUBE_CAPACITY_TPH = 24;
+const TUBE_LINES = ["yellow", "red", "green", "blue"];
 
 const HOUR_MULT = [0.06,0.04,0.03,0.04,0.15,0.55,1.5,2.4,2.6,1.6,1.0,1.0,1.1,1.0,1.1,1.5,2.2,2.6,2.0,1.2,0.8,0.55,0.35,0.15];
 const ROAD_MULT = [0.10,0.06,0.05,0.08,0.18,0.38,0.72,0.94,0.98,0.72,0.52,0.55,0.60,0.60,0.66,0.82,0.95,1.00,0.86,0.62,0.44,0.32,0.22,0.14];
@@ -213,7 +231,7 @@ const EVENTS = [
 ];
 
 const UPGRADES = [
-  { id: "railcars", name: "New railcars", desc: "−8% per-car operating cost each", base: 250000, max: 3 },
+  { id: "railcars", name: "New railcars", desc: "+70 cars to the fleet, −8% operating cost", base: 250000, max: 3 },
   { id: "platforms", name: "Platform expansions", desc: "+25% station crowd capacity each", base: 200000, max: 3 },
   { id: "automation", name: "Train automation", desc: "Quicker stops, −4% costs each", base: 400000, max: 2 },
   { id: "marketing", name: "Marketing blitz", desc: "+8% ridership demand each", base: 150000, max: 3 },
@@ -292,6 +310,9 @@ function makeInitialSim() {
     feedT: 4,
     upgrades: { railcars: 0, platforms: 0, automation: 0, marketing: 0 },
     toasts: [], nextToastId: 1, rushWarned: { am: 0, pm: 0 },
+    carsIdle: FLEET_AVAILABLE,   // cars sitting in yards, ready to dispatch
+    turnbacks: [],               // [{ cars, readyAt }] trains laying over at terminals
+    heldDispatches: 0, heldToday: 0, lastHeldToast: -99,
     history: [], review: null, gameOver: null,
     congestion: {},
   };
@@ -299,7 +320,7 @@ function makeInitialSim() {
 
 function defaultSettings() {
   const lines = {};
-  for (const l of LINES) lines[l.id] = { running: true, peak: { headway: 6, cars: 8 }, off: { headway: 15, cars: 5 } };
+  for (const l of LINES) lines[l.id] = { running: true, peak: { headway: 10, cars: 9 }, off: { headway: 20, cars: 5 } };
   return { lines, fare: 4.25 };
 }
 
@@ -396,6 +417,7 @@ function BartOps() {
       sim.revToday = 0; sim.costToday = 0; sim.riders = 0; sim.giveUps = 0;
       for (const k of Object.keys(STATIONS)) { sim.boardDay[k] = 0; sim.giveDay[k] = 0; }
       for (const l of LINES) sim.lineBoard[l.id] = 0;
+      sim.heldToday = 0;
       sim.day = dayIdx;
       sim.event = rollEvent(sim.day);
       // Weekly board review after every 7th day
@@ -511,6 +533,28 @@ function BartOps() {
       inc.type === "breakdown" ? sim.trains.some(t => t.id === inc.trainId && t.stalled > 0) : sim.closed[inc.station] > 0
     );
 
+    // Cars laying over at terminals return to the yard pool when turnaround completes
+    if (sim.turnbacks.length) {
+      const stillOut = [];
+      for (const tb of sim.turnbacks) {
+        if (sim.clock >= tb.readyAt) sim.carsIdle += tb.cars;
+        else stillOut.push(tb);
+      }
+      sim.turnbacks = stillOut;
+    }
+
+    // Transbay Tube throughput: 24 trains/hour per direction is the hard ceiling.
+    // Schedule more than that and trains queue at the portal instead of vanishing.
+    let scheduledTph = 0;
+    for (const id of TUBE_LINES) {
+      const lc = cfg.lines[id];
+      if (!lc.running) continue;
+      const plan = isPeak(sim.clock) ? lc.peak : lc.off;
+      scheduledTph += 60 / Math.max(2, plan.headway);
+    }
+    sim.tubeTph = scheduledTph;
+    const tubeOver = scheduledTph > TUBE_CAPACITY_TPH;
+
     // Dispatch trains per the active plan (timers freeze while the system is closed)
     if (open) {
       for (const line of LINES) {
@@ -519,20 +563,30 @@ function BartOps() {
         for (const dir of ["fwd", "rev"]) {
           sim.spawn[line.id][dir] -= dt;
           if (sim.spawn[line.id][dir] <= 0) {
-            sim.spawn[line.id][dir] += Math.max(2, plan.headway);
+            // Real departures drift a little — crews, platform clearance, dispatcher discretion
+            const jitter = 1 + (Math.random() - 0.5) * 0.16;
+            sim.spawn[line.id][dir] += Math.max(2, plan.headway) * jitter;
             // Never let the timer stay negative — prevents burst-spawning storms after stalls or big dt
             if (sim.spawn[line.id][dir] < 0.01) sim.spawn[line.id][dir] = 0.01;
             const dirVal = dir === "fwd" ? 1 : -1;
-            const dirCount = sim.trains.reduce((n, t) => n + (t.line === line.id && t.dir === dirVal ? 1 : 0), 0);
-            // Yard cap: roughly one full rotation's worth of trains, plus slack
-            const maxDir = Math.ceil(GEO[line.id].total / SPEED / Math.max(2, plan.headway)) + 4;
-            if (lc.running && dispatchOpen(sim.clock, sim.day) && dirCount < maxDir) {
-              sim.trains.push({
-                id: sim.nextId++, line: line.id, dir: dirVal,
-                dist: dirVal === 1 ? 0 : GEO[line.id].total,
-                stopIdx: dirVal === 1 ? 0 : line.stations.length - 1,
-                cars: plan.cars, load: 0, dwell: 0, stalled: 0,
-              });
+            if (lc.running && dispatchOpen(sim.clock, sim.day)) {
+              if (sim.carsIdle >= plan.cars) {
+                sim.carsIdle -= plan.cars;
+                sim.trains.push({
+                  id: sim.nextId++, line: line.id, dir: dirVal,
+                  dist: dirVal === 1 ? 0 : GEO[line.id].total,
+                  stopIdx: dirVal === 1 ? 0 : line.stations.length - 1,
+                  cars: plan.cars, load: 0, dwell: 0, stalled: 0,
+                });
+              } else {
+                // No cars in the yard. The train simply doesn't go out.
+                sim.heldDispatches++; sim.heldToday++;
+                if (sim.clock - sim.lastHeldToast > 45) {
+                  sim.lastHeldToast = sim.clock;
+                  pushToast(sim, "🚋 No cars available — departures held. Your fleet is fully committed.", "warn");
+                  if (sound) sndBuzz();
+                }
+              }
             }
           }
         }
@@ -556,7 +610,16 @@ function BartOps() {
       } else if (tr.dwell > 0) {
         tr.dwell -= dt;
       } else {
-        let proposed = tr.dist + tr.dir * SPEED * dt;
+        // Trains crawl through the tube when more service is scheduled than it can take
+        const inTube = TUBE_LINES.includes(tr.line) && (() => {
+          const si = line.stations.indexOf("woak"), ei = line.stations.indexOf("embr");
+          const lo = Math.min(cum[si], cum[ei]), hi = Math.max(cum[si], cum[ei]);
+          return tr.dist >= lo - 4 && tr.dist <= hi + 4;
+        })();
+        const speedFactor = inTube && tubeOver
+          ? Math.max(0.45, TUBE_CAPACITY_TPH / scheduledTph)
+          : 1;
+        let proposed = tr.dist + tr.dir * SPEED * speedFactor * dt;
         // Delay cascade: hold behind the train ahead
         const g = groups[tr.line + tr.dir];
         const i = g.indexOf(tr);
@@ -577,23 +640,29 @@ function BartOps() {
           const alighting = isFinal ? tr.load : tr.load * ALIGHT_FRAC;
           tr.load -= alighting;
           if (st.hub && !isFinal) sim.waiting[stKey] += alighting * TRANSFER_FRAC;
+          let flow = alighting;
           // Board — unless the station is closed or this is the train's last stop
           if (!isFinal && !sim.closed[stKey]) {
             const capacity = tr.cars * CAP_PER_CAR;
             const board = Math.min(sim.waiting[stKey], Math.max(0, capacity - tr.load));
             sim.waiting[stKey] -= board;
             tr.load += board;
+            flow += board;
             tickRev += board * cfg.fare;
             sim.riders += board; sim.lifeRiders += board;
             sim.boardDay[stKey] += board; sim.boardWeek[stKey] += board;
             sim.lineBoard[tr.line] += board;
           }
-          tr.dwell = dwell;
+          // Dwell scales with how many people actually move through the doors,
+          // so a packed Embarcadero platform genuinely slows the whole line down.
+          tr.dwell = Math.min(MAX_DWELL, dwell + (flow / 100) * DWELL_PER_100) * (0.85 + Math.random() * 0.3);
           tr.stopIdx += tr.dir;
         }
       }
       const finished = tr.dir === 1 ? tr.stopIdx >= line.stations.length && tr.dwell <= 0 : tr.stopIdx < 0 && tr.dwell <= 0;
       if (!finished) keep.push(tr);
+      // Cars aren't free again until the train turns back at the terminal
+      else sim.turnbacks.push({ cars: tr.cars, readyAt: sim.clock + TURNAROUND_MIN * (0.85 + Math.random() * 0.3) });
     }
     sim.trains = keep;
 
@@ -698,7 +767,11 @@ function BartOps() {
     if (sim.waiting[key] > stationBaseCap(st.size) * capMult * 0.85) overcrowdedNames.push(st.name);
 
   let advisor;
-  if (sim.incidents.length > 0) {
+  if (sim.carsIdle < 10 && sim.heldToday > 3) {
+    advisor = { tone: "bad", text: `Out of railcars — ${Math.round(sim.heldToday)} departures held today. Shorten trains, stretch headways, or buy cars.` };
+  } else if (tubeTph > TUBE_CAPACITY_TPH) {
+    advisor = { tone: "bad", text: `Transbay Tube oversubscribed (${tubeTph.toFixed(0)} of ${TUBE_CAPACITY_TPH} tph). Trains are crawling through the portal — longer trains beat more trains here.` };
+  } else if (sim.incidents.length > 0) {
     advisor = { tone: "bad", text: `⚠ ${sim.incidents[sim.incidents.length - 1].label}. Expect delays behind it.` };
   } else if (overcrowdedNames.length >= 4) {
     advisor = { tone: "bad", text: `${overcrowdedNames.length} stations overcrowded — riders are defecting to the freeway. Shorten headways or add cars.` };
@@ -736,6 +809,7 @@ function BartOps() {
     if (lvl >= u.max || sim.treasury < cost) return;
     sim.treasury -= cost;
     sim.upgrades[u.id] += 1;
+    if (u.id === "railcars") sim.carsIdle += 70;
     sim.feed.unshift({ t: sim.clock, text: `BART Ops: purchased ${u.name.toLowerCase()} (level ${lvl + 1}).`, tone: "official" });
     pushToast(sim, `🔧 ${u.name} online (level ${lvl + 1})`, "good");
     if (soundRef.current) sndChime();
@@ -749,6 +823,34 @@ function BartOps() {
   const liveScore = Math.max(0, Math.round((wtdRiders / 10 + wtdNet / 10 - wtdGive / 5) * (0.5 + sim.satisfaction / 100)));
   const topScore = leaders.length ? leaders[0].score : 0;
 
+  // Next-train ETA per station — turns the map into a live arrivals board
+  const nextEta = {};
+  for (const tr of sim.trains) {
+    if (tr.stalled > 0) continue;
+    const line = LINES.find(l => l.id === tr.line);
+    const cum = GEO[tr.line].cum;
+    let t = tr.dwell;
+    let idx = tr.stopIdx;
+    let pos = tr.dist;
+    let hops = 0;
+    while (idx >= 0 && idx < line.stations.length && hops < 6) {
+      t += Math.abs(cum[idx] - pos) / SPEED;
+      const k = line.stations[idx];
+      if (nextEta[k] === undefined || t < nextEta[k]) nextEta[k] = t;
+      pos = cum[idx];
+      t += BASE_DWELL;
+      idx += tr.dir;
+      hops++;
+    }
+  }
+
+  const carsInService = sim.trains.reduce((s, t) => s + t.cars, 0);
+  const carsTurning = sim.turnbacks.reduce((s, t) => s + t.cars, 0);
+  const fleetOwned = FLEET_AVAILABLE + 70 * sim.upgrades.railcars;
+  const fleetUsePct = Math.min(100, (carsInService / fleetOwned) * 100);
+  const tubeTph = sim.tubeTph || 0;
+  const tubePct = Math.min(100, (tubeTph / TUBE_CAPACITY_TPH) * 100);
+
   const focusLineObj = focusLine ? LINES.find(l => l.id === focusLine) : null;
   const focusSet = focusLineObj ? new Set(focusLineObj.stations) : null;
   let focusStats = null;
@@ -759,7 +861,7 @@ function BartOps() {
     const crowdedOnLine = focusLineObj.stations.filter(k => sim.waiting[k] > stationBaseCap(STATIONS[k].size) * capMult * 0.85);
     let busiest = focusLineObj.stations[0];
     for (const k of focusLineObj.stations) if (sim.boardDay[k] > sim.boardDay[busiest]) busiest = k;
-    focusStats = { trs: trs.length, avgLoad, lineCostRate, crowdedOnLine, busiest, boardings: sim.lineBoard[focusLine] };
+    focusStats = { trs: trs.length, avgLoad, lineCostRate, crowdedOnLine, busiest, boardings: sim.lineBoard[focusLine], cars: trs.reduce((s, t) => s + t.cars, 0) };
   }
   const congColor = (c) => (c < 0.45 ? "#3fa14f" : c < 0.68 ? "#e8b93a" : c < 0.85 ? "#e07b2f" : "#d63a3a");
   const mono = { fontFamily: "'SF Mono', 'Cascadia Code', Consolas, monospace" };
@@ -850,7 +952,7 @@ function BartOps() {
               return (
                 <g key={key} opacity={focusSet && !focusSet.has(key) ? 0.15 : 1}>
                   <circle cx={st.x} cy={st.y} r={ratio > 0.85 || closed ? 7 : 5.2} fill="#0e1216" stroke={ring} strokeWidth={ratio > 0.5 || closed ? 2.6 : 1.6}>
-                    <title>{`${st.name}${st.hub ? " (transfer hub)" : ""}${closed ? " — CLOSED" : ""} — ${Math.round(sim.waiting[key])} waiting (max ~${Math.round(cap)})`}</title>
+                    <title>{`${st.name}${st.hub ? " (transfer hub)" : ""}${closed ? " — CLOSED" : ""} — ${Math.round(sim.waiting[key])} waiting (max ~${Math.round(cap)})${nextEta[key] !== undefined ? ` · next train ${nextEta[key] < 1 ? "arriving" : Math.round(nextEta[key]) + " min"}` : svcOpen ? " · no train inbound" : ""}`}</title>
                   </circle>
                   <circle cx={st.x} cy={st.y} r={2.2} fill={st.hub ? "#FFB020" : "#c7d0d9"} />
                   {closed && <text x={st.x - 4} y={st.y - 9} fontSize={11} fill="#E0403F" fontWeight="700">✕</text>}
@@ -922,6 +1024,34 @@ function BartOps() {
             </div>
           </div>
 
+          {/* Fleet & tube gauges — the two hard constraints */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1, background: "#0f1418", border: "1px solid #232c35", borderRadius: 6, padding: "7px 9px" }}
+              title={`${Math.round(carsInService)} cars in service · ${Math.round(carsTurning)} turning back at terminals · ${Math.round(sim.carsIdle)} idle in yards · ${fleetOwned} usable fleet`}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, letterSpacing: 1, color: "#8a97a3", fontWeight: 700 }}>
+                <span>FLEET</span><span style={mono}>{Math.round(carsInService)}/{fleetOwned}</span>
+              </div>
+              <div style={{ height: 5, background: "#0a0e12", borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div style={{ width: `${fleetUsePct}%`, height: "100%", background: fleetUsePct > 92 ? "#E0403F" : fleetUsePct > 75 ? "#FFB020" : "#4DA859" }} />
+              </div>
+              <div style={{ fontSize: 9.5, color: sim.carsIdle < 20 ? "#E0403F" : "#5c6a76", marginTop: 2 }}>
+                {Math.round(sim.carsIdle)} idle · {Math.round(carsTurning)} turning
+              </div>
+            </div>
+            <div style={{ flex: 1, background: "#0f1418", border: "1px solid #232c35", borderRadius: 6, padding: "7px 9px" }}
+              title={`Transbay Tube: ${tubeTph.toFixed(1)} trains/hour scheduled against a hard ceiling of ${TUBE_CAPACITY_TPH}. Over that, trains queue at the portal.`}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, letterSpacing: 1, color: "#8a97a3", fontWeight: 700 }}>
+                <span>TUBE</span><span style={mono}>{tubeTph.toFixed(0)}/{TUBE_CAPACITY_TPH} tph</span>
+              </div>
+              <div style={{ height: 5, background: "#0a0e12", borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div style={{ width: `${tubePct}%`, height: "100%", background: tubeTph > TUBE_CAPACITY_TPH ? "#E0403F" : tubePct > 88 ? "#FFB020" : "#4DA859" }} />
+              </div>
+              <div style={{ fontSize: 9.5, color: tubeTph > TUBE_CAPACITY_TPH ? "#E0403F" : "#5c6a76", marginTop: 2 }}>
+                {tubeTph > TUBE_CAPACITY_TPH ? "over capacity — queuing" : "within capacity"}
+              </div>
+            </div>
+          </div>
+
           {/* Tabs */}
           <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
             {[["service", "Service"], ["money", "Money"], ["city", "City"], ["scores", "Scores"]].map(([id, label]) => (
@@ -945,8 +1075,9 @@ function BartOps() {
                     <button onClick={() => setFocusLine(null)} style={{ ...btn("#1d252d", "#8a97a3"), marginLeft: "auto", padding: "2px 8px", fontSize: 10.5 }}>unfocus</button>
                   </div>
                   <div style={{ fontSize: 11.5, lineHeight: 1.8, color: "#c7d0d9", ...mono }}>
-                    {focusStats.trs} trains · avg load {Math.round(focusStats.avgLoad * 100)}% · burn {fmtMoney(focusStats.lineCostRate)}/min<br />
-                    boardings today {Math.round(focusStats.boardings).toLocaleString()} (≈{fmtMoney(focusStats.boardings * cfg.fare)}) · busiest: {STATIONS[focusStats.busiest].name}
+                    {focusStats.trs} trains · {focusStats.cars} cars committed · avg load {Math.round(focusStats.avgLoad * 100)}%<br />
+                    burn {fmtMoney(focusStats.lineCostRate)}/min · boardings today {Math.round(focusStats.boardings).toLocaleString()} (≈{fmtMoney(focusStats.boardings * cfg.fare)})<br />
+                    busiest: {STATIONS[focusStats.busiest].name}
                   </div>
                   {focusStats.crowdedOnLine.length > 0 && (
                     <div style={{ fontSize: 11, color: "#FFB020", marginTop: 4 }}>⚠ crowding at {focusStats.crowdedOnLine.slice(0, 3).map(k => STATIONS[k].name).join(", ")}</div>
@@ -1008,6 +1139,7 @@ function BartOps() {
                 <div style={{ borderTop: "1px solid #232c35", margin: "6px 0" }} />
                 <Row label="Riders carried" value={Math.round(sim.riders).toLocaleString()} color="#c7d0d9" />
                 <Row label="Gave up waiting" value={Math.round(sim.giveUps).toLocaleString()} color={sim.giveUps > 500 ? "#E0403F" : "#8a97a3"} />
+                <Row label="Departures held" value={Math.round(sim.heldToday).toLocaleString()} color={sim.heldToday > 5 ? "#E0403F" : "#8a97a3"} />
                 {sim.yesterday && <Row label={`Day ${sim.yesterday.day} net`} value={fmtMoney(sim.yesterday.net)} color={sim.yesterday.net >= 0 ? "#4DA859" : "#E0403F"} />}
               </div>
               <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>CAPITAL PROGRAM</div>
@@ -1113,9 +1245,11 @@ function BartOps() {
         <div style={{ position: "absolute", top: 64, left: 16, zIndex: 6, background: "#151b21", border: "1px solid #2c3844", borderRadius: 10, padding: "14px 18px", width: "min(46%, 400px)", boxShadow: "0 8px 30px rgba(0,0,0,0.55)" }}>
           <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>Monday, 4:40 AM — set up your week</div>
           <div style={{ fontSize: 12, color: "#c7d0d9", lineHeight: 1.7, marginBottom: 10 }}>
-            Adjust the fare, headways, and cars per line in the panel before service opens.
-            Trains run 5 AM–midnight weekdays (Sat 6 AM, Sun 8 AM) — overnight the trains go
-            dark but the freeways don't. The Board reviews you every Monday at midnight.
+            Adjust the fare, headways, and cars per line before service opens. You have a
+            finite fleet of {FLEET_AVAILABLE} railcars — a train can't leave until cars come back
+            and turn around, and the Transbay Tube tops out at {TUBE_CAPACITY_TPH} trains an hour.
+            Trains run 5 AM–midnight weekdays (Sat 6 AM, Sun 8 AM); overnight the trains go
+            dark but the freeways don't.
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <button onClick={() => setStarted(true)} style={{ ...btn("#4DA859"), padding: "8px 24px", fontSize: 13, fontWeight: 700 }}>Begin week ▶</button>
@@ -1251,7 +1385,6 @@ function MiniBars({ title, vals, money }) {
     </div>
   );
 }
-
 
 ReactDOM.createRoot(document.getElementById("root")).render(<BartOps />);
 </script>
