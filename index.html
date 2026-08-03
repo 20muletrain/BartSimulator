@@ -1,0 +1,1495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BART OPS — run the Bay Area's rail system</title>
+<meta name="description" content="Set headways, fares, and train lengths. Keep the platforms clear and the budget positive. A BART operations simulator." />
+<meta name="theme-color" content="#0e1216" />
+<meta property="og:title" content="BART OPS" />
+<meta property="og:description" content="Run the Bay Area's rail system. Beat your friends' scores." />
+<meta property="og:type" content="website" />
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js" crossorigin></script>
+
+<style>
+  * { box-sizing: border-box; }
+  html, body, #root { margin: 0; padding: 0; height: 100%; background: #0e1216; }
+  body { -webkit-font-smoothing: antialiased; overflow: hidden; overscroll-behavior: none; }
+  #boot {
+    height: 100%; display: flex; align-items: center; justify-content: center;
+    color: #8a97a3; font-family: Helvetica, Arial, sans-serif; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot">Loading BART OPS…</div></div>
+
+<script>
+// Leaderboard storage. Backed by localStorage, so scores are per-browser.
+// To make it a shared leaderboard, replace these three bodies with fetch()
+// calls to a backend — nothing else in the game needs to change.
+if (!window.storage) {
+  var K = function (k) { return "bartops:" + k; };
+  window.storage = {
+    get: async function (key) {
+      var value = localStorage.getItem(K(key));
+      if (value === null) throw new Error("key not found: " + key);
+      return { key: key, value: value, shared: false };
+    },
+    set: async function (key, value) {
+      localStorage.setItem(K(key), value);
+      return { key: key, value: value, shared: false };
+    },
+    delete: async function (key) {
+      localStorage.removeItem(K(key));
+      return { key: key, deleted: true, shared: false };
+    },
+    list: async function (prefix) {
+      prefix = prefix || "";
+      var keys = Object.keys(localStorage)
+        .filter(function (k) { return k.indexOf(K(prefix)) === 0; })
+        .map(function (k) { return k.slice("bartops:".length); });
+      return { keys: keys, prefix: prefix, shared: false };
+    }
+  };
+}
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+
+
+// ─────────────────────────────────────────────────────────────
+// BART OPS — Bay Area Rapid Transit operations simulator
+// Trains, money, chaos, and the eternal question:
+// drive to SFO, or trust the Yellow line?
+// ─────────────────────────────────────────────────────────────
+
+const STATIONS = {
+  antc: { name: "Antioch", x: 858, y: 72, size: 3, emp: 0.15 },
+  pctr: { name: "Pittsburg Center", x: 818, y: 94, size: 2, emp: 0.15 },
+  pbp:  { name: "Pittsburg/Bay Point", x: 778, y: 116, size: 3, emp: 0.15 },
+  ncon: { name: "North Concord", x: 740, y: 138, size: 2, emp: 0.2 },
+  conc: { name: "Concord", x: 702, y: 160, size: 3, emp: 0.3 },
+  phil: { name: "Pleasant Hill", x: 664, y: 182, size: 3, emp: 0.25 },
+  wcrk: { name: "Walnut Creek", x: 626, y: 204, size: 4, emp: 0.4 },
+  lafy: { name: "Lafayette", x: 588, y: 226, size: 2, emp: 0.15 },
+  orin: { name: "Orinda", x: 550, y: 248, size: 2, emp: 0.15 },
+  rock: { name: "Rockridge", x: 512, y: 270, size: 3, emp: 0.3 },
+  rich: { name: "Richmond", x: 404, y: 48, size: 3, emp: 0.25 },
+  deln: { name: "El Cerrito del Norte", x: 414, y: 90, size: 4, emp: 0.2 },
+  plza: { name: "El Cerrito Plaza", x: 424, y: 132, size: 2, emp: 0.2 },
+  nbrk: { name: "North Berkeley", x: 434, y: 174, size: 2, emp: 0.2 },
+  dbrk: { name: "Downtown Berkeley", x: 444, y: 216, size: 6, emp: 0.55 },
+  ashb: { name: "Ashby", x: 456, y: 258, size: 2, emp: 0.25 },
+  mcar: { name: "MacArthur", x: 480, y: 300, size: 5, hub: true, emp: 0.35 },
+  n19:  { name: "19th St Oakland", x: 468, y: 332, size: 6, emp: 0.7 },
+  n12:  { name: "12th St Oakland", x: 456, y: 362, size: 6, hub: true, emp: 0.7 },
+  lake: { name: "Lake Merritt", x: 486, y: 398, size: 4, emp: 0.5 },
+  woak: { name: "West Oakland", x: 372, y: 382, size: 4, emp: 0.3 },
+  embr: { name: "Embarcadero", x: 300, y: 398, size: 12, emp: 0.92 },
+  mont: { name: "Montgomery", x: 278, y: 420, size: 11, emp: 0.92 },
+  powl: { name: "Powell", x: 256, y: 442, size: 10, emp: 0.8 },
+  civc: { name: "Civic Center", x: 234, y: 464, size: 8, emp: 0.75 },
+  s16:  { name: "16th St Mission", x: 226, y: 496, size: 5, emp: 0.4 },
+  s24:  { name: "24th St Mission", x: 222, y: 528, size: 5, emp: 0.3 },
+  glen: { name: "Glen Park", x: 218, y: 560, size: 3, emp: 0.25 },
+  balb: { name: "Balboa Park", x: 214, y: 592, size: 5, emp: 0.3 },
+  daly: { name: "Daly City", x: 208, y: 624, size: 5, emp: 0.25 },
+  colm: { name: "Colma", x: 224, y: 654, size: 2, emp: 0.2 },
+  ssfo: { name: "South San Francisco", x: 244, y: 682, size: 2, emp: 0.35 },
+  sbrn: { name: "San Bruno", x: 264, y: 710, size: 2, emp: 0.3 },
+  sfia: { name: "SFO Airport", x: 302, y: 728, size: 4, emp: 0.7 },
+  mlbr: { name: "Millbrae", x: 246, y: 742, size: 3, emp: 0.4 },
+  frtv: { name: "Fruitvale", x: 522, y: 430, size: 4, emp: 0.3 },
+  cols: { name: "Coliseum", x: 552, y: 460, size: 4, emp: 0.4 },
+  sanl: { name: "San Leandro", x: 582, y: 490, size: 3, emp: 0.3 },
+  bayf: { name: "Bay Fair", x: 612, y: 520, size: 4, hub: true, emp: 0.3 },
+  hayw: { name: "Hayward", x: 638, y: 552, size: 3, emp: 0.35 },
+  shay: { name: "South Hayward", x: 662, y: 584, size: 2, emp: 0.2 },
+  ucty: { name: "Union City", x: 686, y: 616, size: 2, emp: 0.25 },
+  frmt: { name: "Fremont", x: 710, y: 648, size: 4, emp: 0.35 },
+  wspr: { name: "Warm Springs", x: 734, y: 678, size: 2, emp: 0.3 },
+  mlps: { name: "Milpitas", x: 758, y: 706, size: 2, emp: 0.3 },
+  brya: { name: "Berryessa", x: 782, y: 734, size: 3, emp: 0.35 },
+  dubl: { name: "Dublin/Pleasanton", x: 806, y: 452, size: 4, emp: 0.35 },
+  wdub: { name: "West Dublin", x: 748, y: 472, size: 2, emp: 0.3 },
+  cast: { name: "Castro Valley", x: 688, y: 494, size: 2, emp: 0.2 },
+};
+
+const SF_CORE = ["embr", "mont", "powl", "civc", "s16", "s24", "glen", "balb", "daly"];
+
+const LINES = [
+  { id: "yellow", color: "#F5C518", dark: "#8a6d00", name: "Yellow", route: "Antioch ↔ SFO",
+    stations: ["antc","pctr","pbp","ncon","conc","phil","wcrk","lafy","orin","rock","mcar","n19","n12","woak",...SF_CORE,"colm","ssfo","sbrn","sfia"], offset: [0, 0] },
+  { id: "red", color: "#E0403F", dark: "#7c1a1a", name: "Red", route: "Richmond ↔ Millbrae",
+    stations: ["rich","deln","plza","nbrk","dbrk","ashb","mcar","n19","n12","woak",...SF_CORE,"colm","ssfo","sbrn","mlbr"], offset: [-4, -2] },
+  { id: "orange", color: "#F1861D", dark: "#8a4a08", name: "Orange", route: "Richmond ↔ Berryessa",
+    stations: ["rich","deln","plza","nbrk","dbrk","ashb","mcar","n19","n12","lake","frtv","cols","sanl","bayf","hayw","shay","ucty","frmt","wspr","mlps","brya"], offset: [4, 2] },
+  { id: "green", color: "#4DA859", dark: "#1e5a28", name: "Green", route: "Berryessa ↔ Daly City",
+    stations: ["brya","mlps","wspr","frmt","ucty","shay","hayw","bayf","sanl","cols","frtv","lake","woak",...SF_CORE], offset: [-4, 3] },
+  { id: "blue", color: "#2C87C8", dark: "#123f61", name: "Blue", route: "Dublin ↔ Daly City",
+    stations: ["dubl","wdub","cast","bayf","sanl","cols","frtv","lake","woak",...SF_CORE], offset: [4, -3] },
+];
+
+const GEO = {};
+for (const line of LINES) {
+  const pts = line.stations.map((k) => [STATIONS[k].x, STATIONS[k].y]);
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++)
+    cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  const ci = line.stations.indexOf("mont");
+  GEO[line.id] = { pts, cum, total: cum[cum.length - 1], coreIdx: ci !== -1 ? ci : line.stations.indexOf("n12") };
+}
+// How many lines serve each station — riders wait for THEIR line, so one train
+// can only board its share of a shared platform (with slack for trunk-only trips)
+const LINES_SERVING = {};
+for (const k of Object.keys(STATIONS)) LINES_SERVING[k] = LINES.filter((l) => l.stations.includes(k)).length;
+
+function pointAt(lineId, d) {
+  const { pts, cum, total } = GEO[lineId];
+  const dd = Math.max(0, Math.min(d, total));
+  let i = 1;
+  while (i < cum.length - 1 && cum[i] < dd) i++;
+  const t = (dd - cum[i - 1]) / (cum[i] - cum[i - 1] || 1);
+  return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t];
+}
+
+// ── Freeway network for the traffic overlay ─────────────────
+// Routed parallel to the BART corridors with a visible gap, like the real thing
+const FREEWAYS = [
+  { id: "i80br", name: "I-80 / Bay Bridge", label: "80", w: 1.2, labelAt: 2,
+    pts: [[380,40],[396,118],[410,198],[422,266],[416,328],[396,358],[338,372],[298,390]] },
+  { id: "i880", name: "I-880 Nimitz", label: "880", w: 1.1, labelAt: 4,
+    pts: [[440,368],[482,420],[524,467],[564,507],[600,544],[636,590],[676,640],[710,686],[746,726]] },
+  { id: "i580", name: "I-580", label: "580", w: 0.95, labelAt: 2,
+    pts: [[482,262],[560,330],[640,410],[700,464],[756,450],[812,436]] },
+  { id: "us101", name: "US-101", label: "101", w: 1.0, labelAt: 3,
+    pts: [[304,412],[288,456],[274,514],[270,574],[274,634],[288,694],[306,740]] },
+  { id: "ca24", name: "CA-24 / Hwy 4", label: "24", w: 0.85, labelAt: 3,
+    pts: [[470,262],[528,236],[584,211],[640,186],[708,146],[776,100],[858,56]] },
+  { id: "sm92", name: "San Mateo Bridge", label: "92", w: 0.9, labelAt: 1,
+    pts: [[248,612],[366,584],[494,558],[596,536]] },
+];
+
+// ── Tuning (grounded in real BART operating figures) ────────
+const SPEED = 18;               // px per sim-minute (~35 mph average incl. stops)
+const BASE_DWELL = 0.33;        // 20-second base station stop
+const DWELL_PER_100 = 0.22;     // extra minutes per 100 riders boarding/alighting
+const MAX_DWELL = 2.2;          // even a mob clears eventually
+const CAP_PER_CAR = 140;
+const BASE_FARE = 4.25;
+const BASE_COST_PER_CAR_MIN = 2.75;
+const OVERHEAD_PER_MIN = 400;
+// Commute tide: stations have an employment share (emp). Residential stations
+// originate the AM rush and absorb the PM one; employment stations do the
+// reverse. Alighting is no longer a flat fraction — it follows the tide too.
+const ALIGHT_MIN = 0.05;
+const ALIGHT_TIDE = 0.6;        // peak-direction alight strength at a pure job center
+const ALIGHT_MID = 0.12;        // midday base turnover
+const COUNTERFLOW = 0.08;       // share of "wrong-way" riders a train still picks up
+const DOOR_PER_CAR = 50;        // max riders who can board per car in one stop
+const TIDE_AMP = 3.0;           // strength of the commute tide
+const PEAK_BOOST = 0.5;         // extra systemwide demand at the height of each rush
+
+// Sentiment: satisfaction tracks a service-quality score Q built from what riders
+// actually experience — platform waits, train crush, reliability, fares, give-ups.
+// It falls fast and recovers slowly. A long-memory "reputation" follows it and
+// feeds demand, so good weeks grow ridership and bad weeks bleed it.
+const SAT_DROP_TAU = 30, SAT_RISE_TAU = 150;
+const REP_TAU = 600, REP_LO = 0.55, REP_SPAN = 0.9;
+const TRANSFER_FRAC = 0.35;
+const TRAIN_GAP = 16;
+const START_TREASURY = 500000;
+
+// Fleet: BART's roster is ~1,070 cars, but ~90 sit in repair/maintenance at any
+// time and a reserve is held back for recovery. What's left is what you can run.
+const FLEET_TOTAL = 1070;
+const FLEET_MAINTENANCE = 90;
+const FLEET_RESERVE = 40;
+const FLEET_AVAILABLE = FLEET_TOTAL - FLEET_MAINTENANCE - FLEET_RESERVE; // 940
+
+// Terminal turnaround: a train that finishes its run must be inspected, changed
+// ends, and laid over before those cars can go out again.
+const TURNAROUND_MIN = 11;
+
+// The Transbay Tube is the binding constraint on the whole system: 24 trains per
+// hour per direction is the hard ceiling with today's train control.
+const TUBE_CAPACITY_TPH = 24;
+const TUBE_LINES = ["yellow", "red", "green", "blue"];
+
+const HOUR_MULT = [0.06,0.04,0.03,0.04,0.15,0.55,1.5,2.4,2.6,1.6,1.0,1.0,1.1,1.0,1.1,1.5,2.2,2.6,2.0,1.2,0.8,0.55,0.35,0.15];
+const ROAD_MULT = [0.10,0.06,0.05,0.08,0.18,0.38,0.72,0.94,0.98,0.72,0.52,0.55,0.60,0.60,0.66,0.82,0.95,1.00,0.86,0.62,0.44,0.32,0.22,0.14];
+
+function curveAt(arr, clockMin) {
+  const h = (clockMin / 60) % 24;
+  const h0 = Math.floor(h), h1 = (h0 + 1) % 24, t = h - h0;
+  return arr[h0] * (1 - t) + arr[h1] * t;
+}
+const demandMult = (c) => curveAt(HOUR_MULT, c);
+const roadBase = (c) => curveAt(ROAD_MULT, c);
+const isPeak = (c) => { const h = (c / 60) % 24; return (h >= 6 && h < 9) || (h >= 15 && h < 19); };
+const stationBaseCap = (size) => 150 + size * 70;
+
+// Real BART hours: weekdays 5 AM–midnight, Sat 6 AM–midnight, Sun 8 AM–midnight
+const DAYNAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const weekday = (day) => (day - 1) % 7;
+const openHour = (day) => { const w = weekday(day); return w === 5 ? 6 : w === 6 ? 8 : 5; };
+const serviceOpen = (clock, day) => ((clock / 60) % 24) >= openHour(day);
+const dispatchOpen = (clock, day) => { const h = (clock / 60) % 24; return h >= openHour(day) && h < 23.2; };
+
+const EVENTS = [
+  { st: "cols", name: "A's game at the Coliseum", h: 19, dur: 3, mult: 6 },
+  { st: "powl", name: "Convention at Moscone", h: 10, dur: 6, mult: 3 },
+  { st: "embr", name: "Ferry Building festival", h: 11, dur: 4, mult: 3 },
+  { st: "dbrk", name: "Cal game day in Berkeley", h: 12, dur: 5, mult: 4 },
+  { st: "s16", name: "Warehouse show in the Mission", h: 20, dur: 3, mult: 5 },
+  { st: "sfia", name: "Holiday travel crush at SFO", h: 14, dur: 6, mult: 3 },
+];
+
+const UPGRADES = [
+  { id: "railcars", name: "New railcars", desc: "+70 cars to the fleet, −8% operating cost", base: 250000, max: 3 },
+  { id: "platforms", name: "Platform expansions", desc: "+25% station crowd capacity each", base: 200000, max: 3 },
+  { id: "automation", name: "Train automation", desc: "Quicker stops, −4% costs each", base: 400000, max: 2 },
+  { id: "marketing", name: "Marketing blitz", desc: "+8% ridership demand each", base: 150000, max: 3 },
+];
+
+const HANDLES = ["@transbaytommy","@foglifter","@bartrat_88","@eastbayellen","@plaidshorts510","@napkinmath","@midnightcommuter","@ohlonegreenway","@karl_the_fog_jr","@spare_the_air"];
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+// ── Audio (tiny WebAudio synth) ─────────────────────────────
+let audioCtx = null;
+function tone(freq, dur, type = "sine", delay = 0, gain = 0.05) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = audioCtx.currentTime + delay;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(gain, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  } catch (e) { /* audio unavailable */ }
+}
+const sndChime = () => { tone(880, 0.35); tone(1318, 0.5, "sine", 0.18); };
+const sndAlert = () => { tone(220, 0.18, "sawtooth", 0, 0.04); tone(220, 0.18, "sawtooth", 0.25, 0.04); };
+const sndBuzz = () => tone(110, 0.7, "square", 0, 0.04);
+const sndScreech = () => { tone(2200, 0.9, "sawtooth", 0, 0.015); tone(2350, 0.9, "sawtooth", 0.05, 0.012); };
+
+function fmtMoney(n) {
+  const neg = n < 0, a = Math.abs(n);
+  const s = a >= 1e6 ? (a / 1e6).toFixed(2) + "M" : a >= 1e3 ? (a / 1e3).toFixed(1) + "K" : a.toFixed(0);
+  return (neg ? "−$" : "$") + s;
+}
+function fmtClock(min) {
+  const m = Math.floor(min % (24 * 60));
+  let h = Math.floor(m / 60);
+  const mm = String(Math.floor(m % 60)).padStart(2, "0");
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${mm} ${ap}`;
+}
+
+function pushToast(sim, text, tone) {
+  sim.toasts.push({ id: sim.nextToastId++, text, tone, exp: Date.now() + 4500 });
+  if (sim.toasts.length > 4) sim.toasts.shift();
+}
+
+function toneBox(tone) {
+  const m = { bad: ["#2c1517", "#E0403F"], warn: ["#2a2210", "#FFB020"], good: ["#14261a", "#4DA859"], official: ["#12202c", "#2C87C8"] };
+  const [bg, bd] = m[tone] || ["#1a222a", "#2c3844"];
+  return { background: bg, border: `1px solid ${bd}`, color: "#e8eaed" };
+}
+
+function rollEvent(day) {
+  if (Math.random() > 0.6) return null;
+  const e = pick(EVENTS);
+  const start = (day - 1) * 1440 + e.h * 60;
+  return { ...e, start, end: start + e.dur * 60, announced: false };
+}
+
+function makeInitialSim() {
+  const waiting = {}, waitIn = {}, boardDay = {}, giveDay = {}, boardWeek = {}, giveWeek = {};
+  for (const k of Object.keys(STATIONS)) { waiting[k] = 0; waitIn[k] = 0; boardDay[k] = 0; giveDay[k] = 0; boardWeek[k] = 0; giveWeek[k] = 0; }
+  const spawn = {}, lineBoard = {};
+  for (const l of LINES) { spawn[l.id] = { fwd: 0.1 + Math.random() * 7, rev: 0.1 + Math.random() * 7 }; lineBoard[l.id] = 0; }
+  return {
+    clock: 4 * 60 + 40, day: 1, weekStart: 1, week: 1, svcWas: false,
+    waiting, waitIn, trains: [], nextId: 1, spawn,
+    treasury: START_TREASURY, bailouts: 0, strikes: 0,
+    reputation: 55, heldRate: 0, qParts: {}, satSum: 0, satN: 0,
+    revToday: 0, costToday: 0, riders: 0, giveUps: 0, lifeRiders: 0,
+    boardDay, giveDay, boardWeek, giveWeek, lineBoard,
+    yesterday: null, satisfaction: 68, revRate: 0, costRate: 0, giveRate: 0,
+    incidents: [], closed: {}, nextIncId: 1,
+    event: rollEvent(1),
+    feed: [{ t: 6 * 60, text: "BART Ops: good morning, operator. The region is counting on you.", tone: "official" }],
+    feedT: 4,
+    upgrades: { railcars: 0, platforms: 0, automation: 0, marketing: 0 },
+    toasts: [], nextToastId: 1, rushWarned: { am: 0, pm: 0 },
+    carsIdle: FLEET_AVAILABLE,   // cars sitting in yards, ready to dispatch
+    turnbacks: [],               // [{ cars, readyAt }] trains laying over at terminals
+    heldDispatches: 0, heldToday: 0, lastHeldToast: -99,
+    history: [], review: null, gameOver: null,
+    congestion: {},
+  };
+}
+
+function defaultSettings() {
+  const lines = {};
+  for (const l of LINES) lines[l.id] = { running: true, peak: { headway: 10, cars: 9 }, off: { headway: 20, cars: 5 } };
+  return { lines, fare: 4.25 };
+}
+
+// ─────────────────────────────────────────────────────────────
+function BartOps() {
+  const [settings, setSettings] = useState(defaultSettings);
+  const [speed, setSpeed] = useState(3);
+  const [paused, setPaused] = useState(false);
+  const [started, setStarted] = useState(false);
+  const [soundOn, setSoundOn] = useState(false);
+  const [showTraffic, setShowTraffic] = useState(true);
+  const [tab, setTab] = useState("service");
+  const [focusLine, setFocusLine] = useState(null);
+  const [leaders, setLeaders] = useState([]);
+  const [initials, setInitials] = useState("OPS");
+  const [savedWeek, setSavedWeek] = useState(0);
+  const [, force] = useState(0);
+
+  const simRef = useRef(null);
+  if (!simRef.current) simRef.current = makeInitialSim();
+  const setRef = useRef(settings);
+  const pausedRef = useRef(paused);
+  const speedRef = useRef(speed);
+  const soundRef = useRef(soundOn);
+  const startedRef = useRef(started);
+  useEffect(() => { setRef.current = settings; }, [settings]);
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+  useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { soundRef.current = soundOn; }, [soundOn]);
+  useEffect(() => { startedRef.current = started; }, [started]);
+
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (!pausedRef.current && startedRef.current) {
+        const sp = speedRef.current;
+        const dt = (sp === "rt" ? 1 / 60 : sp * 2.5) * 0.1;
+        tick(simRef.current, setRef.current, dt, soundRef.current);
+      }
+      force((n) => n + 1);
+    }, 100);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Leaderboard persists across sessions where storage is available; otherwise lives in memory
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("bartops-leaderboard");
+        if (r && r.value) setLeaders(JSON.parse(r.value));
+      } catch (e) { /* no saved scores yet, or storage unavailable */ }
+    })();
+  }, []);
+
+  async function commitScore(entry) {
+    const next = [...leaders, entry].sort((a, b) => b.score - a.score).slice(0, 10);
+    setLeaders(next);
+    try { await window.storage.set("bartops-leaderboard", JSON.stringify(next)); } catch (e) { /* keep in memory */ }
+  }
+  async function clearLeaderboard() {
+    setLeaders([]);
+    try { await window.storage.delete("bartops-leaderboard"); } catch (e) { /* ok */ }
+  }
+
+  // Space bar toggles pause (ignored while typing initials)
+  useEffect(() => {
+    const h = (e) => {
+      if (e.code === "Space" && !["INPUT", "TEXTAREA"].includes(e.target.tagName)) {
+        e.preventDefault();
+        setPaused((p) => !p);
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
+
+  // ── The simulation heart ──────────────────────────────────
+  function tick(sim, cfg, dt, sound) {
+    if (sim.review || sim.gameOver) return;
+
+    sim.clock += dt;
+    const up = sim.upgrades;
+    const carCost = BASE_COST_PER_CAR_MIN * (1 - 0.08 * up.railcars) * (1 - 0.04 * up.automation);
+    const dwell = Math.max(0.2, BASE_DWELL - 0.1 * up.automation);
+    const capMult = 1 + 0.25 * up.platforms;
+    const mktMult = 1 + 0.08 * up.marketing;
+    const fareElast = Math.pow(BASE_FARE / cfg.fare, 0.7);
+
+    // Day rollover
+    const dayIdx = Math.floor(sim.clock / 1440) + 1;
+    if (dayIdx > sim.day) {
+      const rec = { day: sim.day, rev: sim.revToday, cost: sim.costToday, net: sim.revToday - sim.costToday, riders: sim.riders, giveUps: sim.giveUps, sat: sim.satN > 0 ? sim.satSum / sim.satN : sim.satisfaction };
+      sim.history.push(rec);
+      sim.yesterday = rec;
+      sim.revToday = 0; sim.costToday = 0; sim.riders = 0; sim.giveUps = 0;
+      for (const k of Object.keys(STATIONS)) { sim.boardDay[k] = 0; sim.giveDay[k] = 0; }
+      for (const l of LINES) sim.lineBoard[l.id] = 0;
+      sim.heldToday = 0;
+      sim.satSum = 0; sim.satN = 0;
+      sim.day = dayIdx;
+      sim.event = rollEvent(sim.day);
+      // Weekly board review after every 7th day
+      if (sim.day - sim.weekStart >= 7) {
+        const wk = sim.history.slice(-7);
+        const net = wk.reduce((s, r) => s + r.net, 0);
+        const give = wk.reduce((s, r) => s + r.giveUps, 0);
+        const riders = wk.reduce((s, r) => s + r.riders, 0);
+        const avgSat = wk.reduce((s, r) => s + r.sat, 0) / 7;
+        const targets = [
+          { label: "Weekly net ≥ $0", met: net >= 0, val: fmtMoney(net) },
+          { label: "Avg satisfaction ≥ 55%", met: avgSat >= 55, val: Math.round(avgSat) + "%" },
+          { label: "Riders lost to crowding ≤ 100K", met: give <= 100000, val: Math.round(give / 1000) + "K" },
+        ];
+        const met = targets.filter(t => t.met).length;
+        const grade = met === 3 ? (net > 800000 ? "A" : "B") : met === 2 ? "C" : met === 1 ? "D" : "F";
+        const pass = met >= 2;
+        if (!pass) sim.strikes += 1; else sim.strikes = 0;
+        const fired = sim.strikes >= 2;
+        let best = null, worst = null;
+        for (const k of Object.keys(STATIONS)) {
+          if (!best || sim.boardWeek[k] > sim.boardWeek[best]) best = k;
+          if (!worst || sim.giveWeek[k] > sim.giveWeek[worst]) worst = k;
+        }
+        const satMult = 0.5 + avgSat / 100;
+        const score = Math.max(0, Math.round((riders / 10 + net / 25 - give / 2) * satMult * (met === 3 ? 1.25 : 1)));
+        sim.review = { week: sim.week, wk, net, riders, give, avgSat, targets, grade, pass, fired, best, worst, score, allMet: met === 3 };
+        sim.week += 1; sim.weekStart = sim.day;
+        for (const k of Object.keys(STATIONS)) { sim.boardWeek[k] = 0; sim.giveWeek[k] = 0; }
+        if (sound) sndChime();
+      }
+    }
+
+    const wd = weekday(sim.day);
+    const open = serviceOpen(sim.clock, sim.day);
+    if (open !== sim.svcWas) {
+      sim.svcWas = open;
+      pushToast(sim, open ? "🚈 Good morning — system open" : "🌙 System closed — last trains completing their runs", "official");
+      if (sound) sndChime();
+    }
+
+    // Rush-hour heads-up, 15 minutes out (weekdays only)
+    const hrNow = (sim.clock / 60) % 24;
+    if (wd < 5 && hrNow >= 5.75 && hrNow < 6 && sim.rushWarned.am !== sim.day) {
+      sim.rushWarned.am = sim.day;
+      pushToast(sim, "🌅 MORNING RUSH IN 15 MIN — check your peak plan", "warn");
+      if (sound) sndChime();
+    }
+    if (wd < 5 && hrNow >= 14.75 && hrNow < 15 && sim.rushWarned.pm !== sim.day) {
+      sim.rushWarned.pm = sim.day;
+      pushToast(sim, "🌆 EVENING RUSH IN 15 MIN — brace downtown", "warn");
+      if (sound) sndChime();
+    }
+
+    const mult = demandMult(sim.clock) * (wd >= 5 ? 0.55 : 1);
+    let tickRev = 0, tickGive = 0;
+
+    // Event announcement + demand override
+    const ev = sim.event;
+    if (ev && !ev.announced && sim.clock >= ev.start - 60) {
+      ev.announced = true;
+      sim.feed.unshift({ t: sim.clock, text: `BART Ops: ${ev.name} today at ${fmtClock(ev.start)} — expect crowds at ${STATIONS[ev.st].name}.`, tone: "official" });
+      pushToast(sim, `✦ ${ev.name} — ${fmtClock(ev.start)} at ${STATIONS[ev.st].name}`, "official");
+      if (sound) sndChime();
+    }
+    const evActive = ev && sim.clock >= ev.start && sim.clock < ev.end;
+
+    // The commute tide, computed once per tick
+    const amW = Math.max(0, 1 - Math.abs(hrNow - 8) / 2.5);
+    const pmW = Math.max(0, 1 - Math.abs(hrNow - 17.25) / 2.75);
+    const midW = Math.max(0, 1 - amW - pmW);
+    const inShare = Math.min(0.92, Math.max(0.08, 0.5 + 0.42 * amW - 0.42 * pmW));
+    const repFactor = REP_LO + REP_SPAN * sim.reputation / 100;
+
+    // Riders arrive on platforms (only while the system is open; overnight they drift home)
+    for (const [k, st] of Object.entries(STATIONS)) {
+      if (!open) { sim.waiting[k] *= Math.max(0, 1 - 0.1 * dt); sim.waitIn[k] *= Math.max(0, 1 - 0.1 * dt); continue; }
+      const evM = evActive && ev.st === k ? ev.mult : 1;
+      // Residential stations originate the AM rush; job centers originate the PM one
+      const origin = Math.max(0.12, 1 + TIDE_AMP * amW * (1 - 2 * st.emp) + TIDE_AMP * pmW * (2 * st.emp - 1));
+      const arr = st.size * mult * (1 + PEAK_BOOST * (amW + pmW)) * evM * fareElast * mktMult * repFactor * origin * dt;
+      sim.waiting[k] += arr;
+      sim.waitIn[k] += arr * inShare;
+      const cap = stationBaseCap(st.size) * capMult;
+      if (sim.waiting[k] > cap) {
+        const lost = sim.waiting[k] - cap;
+        sim.waitIn[k] *= cap / sim.waiting[k];
+        sim.waiting[k] = cap;
+        sim.giveUps += lost; tickGive += lost;
+        sim.giveDay[k] += lost; sim.giveWeek[k] += lost;
+      }
+    }
+
+    // Random incidents (~5-6 per day, service hours only)
+    if (open && Math.random() < 0.004 * dt) {
+      const roll = Math.random();
+      if (roll < 0.45 && sim.trains.length > 0) {
+        const tr = pick(sim.trains.filter(t => !t.stalled)) || null;
+        if (tr) {
+          tr.stalled = 8 + Math.random() * 14;
+          const line = LINES.find(l => l.id === tr.line);
+          sim.incidents.push({ id: sim.nextIncId++, type: "breakdown", trainId: tr.id, label: `${line.name} line train down — mechanical problem` });
+          sim.feed.unshift({ t: sim.clock, text: `${pick(HANDLES)}: ${line.name} line train just died on the tracks. love that for us`, tone: "bad" });
+          pushToast(sim, `🚨 ${line.name} line train broke down — delays building`, "bad");
+          if (sound) { sndAlert(); sndScreech(); }
+        }
+      } else {
+        const keys = Object.keys(STATIONS).filter(k => !sim.closed[k]);
+        const k = pick(keys);
+        const short = roll >= 0.8;
+        sim.closed[k] = short ? 3 + Math.random() * 3 : 10 + Math.random() * 12;
+        const label = short ? `Medical emergency at ${STATIONS[k].name}` : `Police activity at ${STATIONS[k].name} — station closed`;
+        sim.incidents.push({ id: sim.nextIncId++, type: "closure", station: k, label });
+        sim.feed.unshift({ t: sim.clock, text: `${pick(HANDLES)}: ${STATIONS[k].name} closed?? my commute is a group project now`, tone: "bad" });
+        pushToast(sim, `🚨 ${label}`, "bad");
+        if (sound) sndAlert();
+      }
+    }
+    for (const k of Object.keys(sim.closed)) {
+      sim.closed[k] -= dt;
+      if (sim.closed[k] <= 0) delete sim.closed[k];
+    }
+    sim.incidents = sim.incidents.filter(inc =>
+      inc.type === "breakdown" ? sim.trains.some(t => t.id === inc.trainId && t.stalled > 0) : sim.closed[inc.station] > 0
+    );
+
+    // Cars laying over at terminals return to the yard pool when turnaround completes
+    if (sim.turnbacks.length) {
+      const stillOut = [];
+      for (const tb of sim.turnbacks) {
+        if (sim.clock >= tb.readyAt) sim.carsIdle += tb.cars;
+        else stillOut.push(tb);
+      }
+      sim.turnbacks = stillOut;
+    }
+
+    // Transbay Tube throughput: 24 trains/hour per direction is the hard ceiling.
+    // Schedule more than that and trains queue at the portal instead of vanishing.
+    let scheduledTph = 0;
+    for (const id of TUBE_LINES) {
+      const lc = cfg.lines[id];
+      if (!lc.running) continue;
+      const plan = isPeak(sim.clock) ? lc.peak : lc.off;
+      scheduledTph += 60 / Math.max(2, plan.headway);
+    }
+    sim.tubeTph = scheduledTph;
+    const tubeOver = scheduledTph > TUBE_CAPACITY_TPH;
+
+    // Dispatch trains per the active plan (timers freeze while the system is closed)
+    if (open) {
+      for (const line of LINES) {
+        const lc = cfg.lines[line.id];
+        const plan = isPeak(sim.clock) ? lc.peak : lc.off;
+        for (const dir of ["fwd", "rev"]) {
+          sim.spawn[line.id][dir] -= dt;
+          if (sim.spawn[line.id][dir] <= 0) {
+            // Real departures drift a little — crews, platform clearance, dispatcher discretion
+            const jitter = 1 + (Math.random() - 0.5) * 0.16;
+            sim.spawn[line.id][dir] += Math.max(2, plan.headway) * jitter;
+            // Never let the timer stay negative — prevents burst-spawning storms after stalls or big dt
+            if (sim.spawn[line.id][dir] < 0.01) sim.spawn[line.id][dir] = 0.01;
+            const dirVal = dir === "fwd" ? 1 : -1;
+            if (lc.running && dispatchOpen(sim.clock, sim.day)) {
+              if (sim.carsIdle >= plan.cars) {
+                sim.carsIdle -= plan.cars;
+                sim.trains.push({
+                  id: sim.nextId++, line: line.id, dir: dirVal,
+                  dist: dirVal === 1 ? 0 : GEO[line.id].total,
+                  stopIdx: dirVal === 1 ? 0 : line.stations.length - 1,
+                  cars: plan.cars, load: 0, dwell: 0, stalled: 0,
+                });
+              } else {
+                // No cars in the yard. The train simply doesn't go out.
+                sim.heldDispatches++; sim.heldToday++; sim.heldRate += 1;
+                if (sim.clock - sim.lastHeldToast > 45) {
+                  sim.lastHeldToast = sim.clock;
+                  pushToast(sim, "🚋 No cars available — departures held. Your fleet is fully committed.", "warn");
+                  if (sound) sndBuzz();
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Group trains by line+direction for the cascade check
+    const groups = {};
+    for (const tr of sim.trains) {
+      const key = tr.line + tr.dir;
+      (groups[key] = groups[key] || []).push(tr);
+    }
+    for (const g of Object.values(groups)) g.sort((a, b) => a.dist - b.dist);
+
+    const keep = [];
+    for (const tr of sim.trains) {
+      const line = LINES.find((l) => l.id === tr.line);
+      const cum = GEO[tr.line].cum;
+      if (tr.stalled > 0) {
+        tr.stalled -= dt;
+      } else if (tr.dwell > 0) {
+        tr.dwell -= dt;
+      } else {
+        // Trains crawl through the tube when more service is scheduled than it can take
+        const inTube = TUBE_LINES.includes(tr.line) && (() => {
+          const si = line.stations.indexOf("woak"), ei = line.stations.indexOf("embr");
+          const lo = Math.min(cum[si], cum[ei]), hi = Math.max(cum[si], cum[ei]);
+          return tr.dist >= lo - 4 && tr.dist <= hi + 4;
+        })();
+        const speedFactor = inTube && tubeOver
+          ? Math.max(0.45, TUBE_CAPACITY_TPH / scheduledTph)
+          : 1;
+        let proposed = tr.dist + tr.dir * SPEED * speedFactor * dt;
+        // Delay cascade: hold behind the train ahead
+        const g = groups[tr.line + tr.dir];
+        const i = g.indexOf(tr);
+        const leader = tr.dir === 1 ? g[i + 1] : g[i - 1];
+        if (leader) {
+          if (tr.dir === 1) proposed = Math.min(proposed, Math.max(tr.dist, leader.dist - TRAIN_GAP));
+          else proposed = Math.max(proposed, Math.min(tr.dist, leader.dist + TRAIN_GAP));
+        }
+        tr.dist = proposed;
+        const target = cum[tr.stopIdx];
+        const arrived = tr.dir === 1 ? tr.dist >= target : tr.dist <= target;
+        if (arrived && tr.stopIdx >= 0 && tr.stopIdx < line.stations.length) {
+          tr.dist = target;
+          const stKey = line.stations[tr.stopIdx];
+          const st = STATIONS[stKey];
+          const isFinal = (tr.dir === 1 && tr.stopIdx === line.stations.length - 1) || (tr.dir === -1 && tr.stopIdx === 0);
+          // Is this train currently heading toward the core (downtown SF, or
+          // downtown Oakland for the Orange line)?
+          const coreIdx = GEO[tr.line].coreIdx;
+          const inbound = (coreIdx - tr.stopIdx) * tr.dir > 0;
+          // Alighting follows the tide: inbound AM trains dump at job centers,
+          // outbound PM trains dump at residential stations
+          const tideMatch = inbound ? amW * st.emp * st.emp : pmW * (1 - st.emp) * (1 - st.emp);
+          const af = Math.min(0.85, 0.03 + 0.7 * tideMatch + 0.1 * midW);
+          const alighting = isFinal ? tr.load : tr.load * af;
+          tr.load -= alighting;
+          if (st.hub && !isFinal) {
+            const x = alighting * TRANSFER_FRAC;
+            sim.waiting[stKey] += x;
+            sim.waitIn[stKey] += x * inShare;
+          }
+          let flow = alighting;
+          // Board — unless the station is closed or this is the train's last stop.
+          // Riders wait for a train going their way; a wrong-way train only picks
+          // up the short-hop minority.
+          if (!isFinal && !sim.closed[stKey]) {
+            const capacity = tr.cars * CAP_PER_CAR;
+            const capLeft = Math.max(0, capacity - tr.load);
+            const doorMax = tr.cars * DOOR_PER_CAR;
+            const wTot = sim.waiting[stKey];
+            const wIn = Math.min(sim.waitIn[stKey], wTot);
+            const wOut = wTot - wIn;
+            const matched = inbound ? wIn : wOut;
+            const mismatched = inbound ? wOut : wIn;
+            const shareCap = Math.min(1, 1.7 / LINES_SERVING[stKey]);
+            let board = Math.min(matched * shareCap, capLeft, doorMax);
+            const extra = Math.min(mismatched * COUNTERFLOW * shareCap, capLeft - board, doorMax - board);
+            const tookIn = inbound ? board : extra;
+            sim.waiting[stKey] = Math.max(0, wTot - board - extra);
+            sim.waitIn[stKey] = Math.max(0, wIn - tookIn);
+            board += extra;
+            tr.load += board;
+            flow += board;
+            tickRev += board * cfg.fare;
+            sim.riders += board; sim.lifeRiders += board;
+            sim.boardDay[stKey] += board; sim.boardWeek[stKey] += board;
+            sim.lineBoard[tr.line] += board;
+          }
+          // Dwell scales with how many people actually move through the doors,
+          // so a packed Embarcadero platform genuinely slows the whole line down.
+          tr.dwell = Math.min(MAX_DWELL, dwell + (flow / 100) * DWELL_PER_100) * (0.85 + Math.random() * 0.3);
+          tr.stopIdx += tr.dir;
+        }
+      }
+      const finished = tr.dir === 1 ? tr.stopIdx >= line.stations.length && tr.dwell <= 0 : tr.stopIdx < 0 && tr.dwell <= 0;
+      if (!finished) keep.push(tr);
+      // Cars aren't free again until the train turns back at the terminal
+      else sim.turnbacks.push({ cars: tr.cars, readyAt: sim.clock + TURNAROUND_MIN * (0.85 + Math.random() * 0.3) });
+    }
+    sim.trains = keep;
+
+    // Money + treasury
+    const carMins = sim.trains.reduce((s, t) => s + t.cars, 0);
+    const tickCost = (carMins * carCost + OVERHEAD_PER_MIN * (open ? 1 : 0.35)) * dt;
+    sim.revToday += tickRev;
+    sim.costToday += tickCost;
+    sim.treasury += tickRev - tickCost;
+    if (sim.treasury <= 0) {
+      sim.bailouts += 1;
+      if (sim.bailouts >= 3) {
+        sim.gameOver = { reason: "bailouts" };
+        if (sound) sndBuzz();
+      } else {
+        sim.treasury += 500000;
+        sim.satisfaction = Math.max(0, sim.satisfaction - 15);
+        sim.feed.unshift({ t: sim.clock, text: `BART Ops: emergency state bailout #${sim.bailouts} approved. Sacramento is not amused.`, tone: "official" });
+        pushToast(sim, `🏛️ EMERGENCY BAILOUT #${sim.bailouts} OF 3 — Sacramento is watching`, "bad");
+        if (sound) sndBuzz();
+      }
+    }
+
+    // Rolling rates
+    const k = Math.min(1, 0.06 * dt);
+    sim.revRate = sim.revRate * (1 - k) + (tickRev / dt) * k;
+    sim.costRate = sim.costRate * (1 - k) + (tickCost / dt) * k;
+    sim.giveRate = sim.giveRate * (1 - k) + (tickGive / dt) * k;
+
+    // Sentiment: satisfaction tracks service quality Q; reputation tracks satisfaction
+    sim.heldRate *= Math.max(0, 1 - 0.03 * dt);
+    if (open) {
+      // What riders are experiencing right now
+      let press = 0, wsum = 0;
+      for (const [key, st] of Object.entries(STATIONS)) {
+        const cap = stationBaseCap(st.size) * capMult;
+        press += Math.min(1.5, sim.waiting[key] / cap) * sim.waiting[key];
+        wsum += sim.waiting[key];
+      }
+      const avgFill = wsum > 0 ? press / wsum : 0;
+      let crushNum = 0, crushDen = 0;
+      for (const t of sim.trains) { crushNum += t.load * (t.load / (t.cars * CAP_PER_CAR)); crushDen += t.load; }
+      const riderLF = crushDen > 0 ? crushNum / crushDen : 0;
+      const c01 = (x) => Math.max(0, Math.min(1, x));
+      const waitP = 42 * c01((avgFill - 0.25) / 0.6);
+      const crushP = 34 * c01((riderLF - 0.62) / 0.45);
+      const relP = Math.min(22, sim.heldRate * 2.5 + sim.incidents.length * 6);
+      const fareP = 18 * c01((cfg.fare - BASE_FARE) / 5.75);
+      const fareB = 5 * c01((BASE_FARE - cfg.fare) / 2.25);
+      const giveP = Math.min(40, sim.giveRate * 0.35);
+      const Q = Math.max(5, Math.min(98, 100 - waitP - crushP - relP - fareP - giveP + fareB));
+      const parts = { wait: waitP, crush: crushP, rel: relP, fare: fareP, give: giveP, q: Q };
+      const names = { wait: "long platform waits", crush: "packed trains", rel: "breakdowns and held departures", fare: "fare anger", give: "riders giving up on full platforms" };
+      let topK = "wait"; for (const k of Object.keys(names)) if (parts[k] > parts[topK]) topK = k;
+      parts.top = parts[topK] > 6 ? names[topK] : null;
+      sim.qParts = parts;
+      sim.satisfaction += (Q - sim.satisfaction) * Math.min(1, dt / (Q < sim.satisfaction ? SAT_DROP_TAU : SAT_RISE_TAU));
+      sim.satSum += sim.satisfaction; sim.satN++;
+    } else if (sim.satisfaction < 62) {
+      // Overnight, grudges fade a little — but goodwill is never eroded
+      sim.satisfaction += (Math.min(62, sim.satisfaction + 8) - sim.satisfaction) * dt / 600;
+    }
+    sim.reputation += (sim.satisfaction - sim.reputation) * Math.min(1, dt / REP_TAU);
+
+    // Traffic model: fares up / satisfaction down / riders bailing → more drivers
+    const base = roadBase(sim.clock) * (wd >= 5 ? 0.75 : 1);
+    const shift = 0.18 * (cfg.fare / BASE_FARE - 1) + 0.12 * ((78 - sim.satisfaction) / 78) + Math.min(0.35, sim.giveRate * 0.015);
+    for (let fi = 0; fi < FREEWAYS.length; fi++) {
+      const f = FREEWAYS[fi];
+      sim.congestion[f.id] = Math.max(0, Math.min(1, base * f.w * (1 + shift) + 0.05 * Math.sin(sim.clock / 17 + fi * 2.3)));
+    }
+
+    // Rider feed
+    sim.feedT -= dt;
+    if (sim.feedT <= 0) {
+      sim.feedT = 3 + Math.random() * 7;
+      const h = pick(HANDLES);
+      const crowded = Object.entries(STATIONS).filter(([key, st]) => sim.waiting[key] > stationBaseCap(st.size) * capMult * 0.85);
+      let msg = null;
+      if (crowded.length && Math.random() < 0.8) {
+        const [, st] = pick(crowded);
+        msg = { text: pick([
+          `${h}: ${st.name} platform is a mosh pit rn. WHERE are the trains`,
+          `${h}: third packed train in a row at ${st.name}. I could crawl to work faster`,
+          `${h}: made eye contact with 400 strangers at ${st.name} today. we are a family now`,
+        ]), tone: "bad" };
+      } else if (cfg.fare > 6.5 && Math.random() < 0.5) {
+        msg = { text: pick([
+          `${h}: $${cfg.fare.toFixed(2)} a ride?? might as well valet my bike`,
+          `${h}: at these fares the train better tuck me in when I get home`,
+        ]), tone: "bad" };
+      } else if (mult < 0.4 && carMins > 400) {
+        msg = { text: `${h}: 2am ghost train with ${Math.round(carMins / Math.max(1, sim.trains.length))} cars and me in it. your tax dollars, folks`, tone: "warn" };
+      } else if (sim.revRate - sim.costRate > 150 && sim.satisfaction > 70 && Math.random() < 0.6) {
+        msg = { text: pick([
+          `${h}: ok who fixed BART. train came in 3 minutes. suspicious`,
+          `${h}: got a SEAT during rush hour. framing this post`,
+          `${h}: BART running so smooth today I forgot to complain`,
+        ]), tone: "good" };
+      } else if (Math.random() < 0.4) {
+        msg = { text: pick([
+          `${h}: transbay tube echo hits different at this hour`,
+          `${h}: rating today's fog: 8/10, very atmospheric from the elevated tracks`,
+        ]), tone: "neutral" };
+      }
+      if (msg) sim.feed.unshift({ t: sim.clock, ...msg });
+    }
+    if (sim.feed.length > 12) sim.feed.length = 12;
+  }
+
+  // ── Derived values for rendering ──────────────────────────
+  const sim = simRef.current;
+  const cfg = settings;
+  const capMult = 1 + 0.25 * sim.upgrades.platforms;
+  const netToday = sim.revToday - sim.costToday;
+  const netRate = sim.revRate - sim.costRate;
+  const mult = demandMult(sim.clock) * (weekday(sim.day) >= 5 ? 0.55 : 1);
+  const peak = isPeak(sim.clock);
+  const svcOpen = serviceOpen(sim.clock, sim.day);
+
+  const trainCounts = {};
+  for (const l of LINES) trainCounts[l.id] = 0;
+  for (const t of sim.trains) trainCounts[t.line]++;
+
+  const overcrowdedNames = [];
+  for (const [key, st] of Object.entries(STATIONS))
+    if (sim.waiting[key] > stationBaseCap(st.size) * capMult * 0.85) overcrowdedNames.push(st.name);
+
+  // Fleet and tube state — declared before the advisor, which reads both
+  const carsInService = sim.trains.reduce((s, t) => s + t.cars, 0);
+  const carsTurning = (sim.turnbacks || []).reduce((s, t) => s + t.cars, 0);
+  const fleetOwned = FLEET_AVAILABLE + 70 * sim.upgrades.railcars;
+  const fleetUsePct = Math.min(100, (carsInService / fleetOwned) * 100);
+  const tubeTph = sim.tubeTph || 0;
+  const tubePct = Math.min(100, (tubeTph / TUBE_CAPACITY_TPH) * 100);
+
+  let advisor;
+  if (sim.carsIdle < 10 && sim.heldToday > 3) {
+    advisor = { tone: "bad", text: `Out of railcars — ${Math.round(sim.heldToday)} departures held today. Shorten trains, stretch headways, or buy cars.` };
+  } else if (tubeTph > TUBE_CAPACITY_TPH) {
+    advisor = { tone: "bad", text: `Transbay Tube oversubscribed (${tubeTph.toFixed(0)} of ${TUBE_CAPACITY_TPH} tph). Trains are crawling through the portal — longer trains beat more trains here.` };
+  } else if (sim.satisfaction < 55 && sim.qParts.top) {
+    advisor = { tone: "warn", text: `Sentiment is sliding — biggest driver right now: ${sim.qParts.top}.` };
+  } else if (sim.incidents.length > 0) {
+    advisor = { tone: "bad", text: `⚠ ${sim.incidents[sim.incidents.length - 1].label}. Expect delays behind it.` };
+  } else if (overcrowdedNames.length >= 4) {
+    advisor = { tone: "bad", text: `${overcrowdedNames.length} stations overcrowded — riders are defecting to the freeway. Shorten headways or add cars.` };
+  } else if (overcrowdedNames.length > 0) {
+    advisor = { tone: "warn", text: `Platforms filling at ${overcrowdedNames.slice(0, 3).join(", ")}${overcrowdedNames.length > 3 ? "…" : ""}` };
+  } else if (mult < 0.5 && netRate < -400) {
+    advisor = { tone: "warn", text: "Quiet hours, heavy burn — trains are running nearly empty. Stretch those off-peak headways." };
+  } else if (netRate > 200) {
+    advisor = { tone: "good", text: "Balanced service, healthy farebox. The next rush is coming — check your peak plan." };
+  } else {
+    advisor = { tone: "neutral", text: "System nominal. Demand ramps hard at 7 AM and 4 PM; your peak plan kicks in automatically." };
+  }
+
+  // Oakland → SFO tracker
+  const yl = LINES[0];
+  const iA = yl.stations.indexOf("n12"), iB = yl.stations.indexOf("sfia");
+  const ylPlan = peak ? cfg.lines.yellow.peak : cfg.lines.yellow.off;
+  const dwellEff = Math.max(0.2, BASE_DWELL - 0.1 * sim.upgrades.automation);
+  const inVeh = (GEO.yellow.cum[iB] - GEO.yellow.cum[iA]) / SPEED + (iB - iA) * dwellEff;
+  const sfCrowded = ["embr", "mont", "powl"].some(k => sim.waiting[k] > stationBaseCap(STATIONS[k].size) * capMult * 0.85);
+  const bartMin = cfg.lines.yellow.running && svcOpen ? inVeh + ylPlan.headway / 2 + (sfCrowded ? ylPlan.headway * 0.7 : 0) : null;
+  const bartCost = cfg.fare + 5.5;
+  const driveCong = ((sim.congestion.i80br || 0) + (sim.congestion.us101 || 0) + (sim.congestion.i880 || 0) / 2) / 2.5;
+  const driveMin = 30 * (1 + 1.4 * driveCong);
+  const driveCost = 18;
+  const bartWins = bartMin !== null && bartMin <= driveMin;
+
+  const updatePlan = (id, planKey, field, value) =>
+    setSettings((s) => ({ ...s, lines: { ...s.lines, [id]: { ...s.lines[id], [planKey]: { ...s.lines[id][planKey], [field]: value } } } }));
+  const updateLine = (id, field, value) =>
+    setSettings((s) => ({ ...s, lines: { ...s.lines, [id]: { ...s.lines[id], [field]: value } } }));
+  const buyUpgrade = (u) => {
+    const lvl = sim.upgrades[u.id];
+    const cost = u.base * (lvl + 1);
+    if (lvl >= u.max || sim.treasury < cost) return;
+    sim.treasury -= cost;
+    sim.upgrades[u.id] += 1;
+    if (u.id === "railcars") sim.carsIdle += 70;
+    sim.feed.unshift({ t: sim.clock, text: `BART Ops: purchased ${u.name.toLowerCase()} (level ${lvl + 1}).`, tone: "official" });
+    pushToast(sim, `🔧 ${u.name} online (level ${lvl + 1})`, "good");
+    if (soundRef.current) sndChime();
+  };
+  const resetAll = () => { simRef.current = makeInitialSim(); setPaused(false); setSavedWeek(0); setFocusLine(null); setStarted(false); };
+
+  const wtdRecs = sim.history.filter(r => r.day >= sim.weekStart);
+  const wtdNet = wtdRecs.reduce((s, r) => s + r.net, 0) + netToday;
+  const wtdRiders = wtdRecs.reduce((s, r) => s + r.riders, 0) + sim.riders;
+  const wtdGive = wtdRecs.reduce((s, r) => s + r.giveUps, 0) + sim.giveUps;
+  const liveScore = Math.max(0, Math.round((wtdRiders / 10 + wtdNet / 25 - wtdGive / 2) * (0.5 + sim.satisfaction / 100)));
+  const topScore = leaders.length ? leaders[0].score : 0;
+
+  // Next-train ETA per station — turns the map into a live arrivals board
+  const nextEta = {};
+  for (const tr of sim.trains) {
+    if (tr.stalled > 0) continue;
+    const line = LINES.find(l => l.id === tr.line);
+    const cum = GEO[tr.line].cum;
+    let t = tr.dwell;
+    let idx = tr.stopIdx;
+    let pos = tr.dist;
+    let hops = 0;
+    while (idx >= 0 && idx < line.stations.length && hops < 6) {
+      t += Math.abs(cum[idx] - pos) / SPEED;
+      const k = line.stations[idx];
+      if (nextEta[k] === undefined || t < nextEta[k]) nextEta[k] = t;
+      pos = cum[idx];
+      t += BASE_DWELL;
+      idx += tr.dir;
+      hops++;
+    }
+  }
+
+  const focusLineObj = focusLine ? LINES.find(l => l.id === focusLine) : null;
+  const focusSet = focusLineObj ? new Set(focusLineObj.stations) : null;
+  let focusStats = null;
+  if (focusLineObj) {
+    const trs = sim.trains.filter(t => t.line === focusLine);
+    const avgLoad = trs.length ? trs.reduce((s, t) => s + t.load / (t.cars * CAP_PER_CAR), 0) / trs.length : 0;
+    const lineCostRate = trs.reduce((s, t) => s + t.cars, 0) * BASE_COST_PER_CAR_MIN * (1 - 0.08 * sim.upgrades.railcars) * (1 - 0.04 * sim.upgrades.automation);
+    const crowdedOnLine = focusLineObj.stations.filter(k => sim.waiting[k] > stationBaseCap(STATIONS[k].size) * capMult * 0.85);
+    let busiest = focusLineObj.stations[0];
+    for (const k of focusLineObj.stations) if (sim.boardDay[k] > sim.boardDay[busiest]) busiest = k;
+    focusStats = { trs: trs.length, avgLoad, lineCostRate, crowdedOnLine, busiest, boardings: sim.lineBoard[focusLine], cars: trs.reduce((s, t) => s + t.cars, 0) };
+  }
+  const congColor = (c) => (c < 0.45 ? "#3fa14f" : c < 0.68 ? "#e8b93a" : c < 0.85 ? "#e07b2f" : "#d63a3a");
+  const mono = { fontFamily: "'SF Mono', 'Cascadia Code', Consolas, monospace" };
+  const feedColor = { bad: "#e08b8b", warn: "#e0c07d", good: "#8fd3a0", neutral: "#93a3b1", official: "#7fb3dc" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", minHeight: 640, background: "#0e1216", color: "#e8eaed", fontFamily: "'Helvetica Neue', Helvetica, Arial, sans-serif", overflow: "hidden", position: "relative" }}>
+      <style>{`
+        @keyframes bopIn { from { transform: translateY(-14px) scale(0.92); opacity: 0 } to { transform: none; opacity: 1 } }
+        @keyframes peakPulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.5 } }
+        @keyframes blinkStart { 50% { opacity: 0 } }
+        @media (prefers-reduced-motion: reduce) { * { animation: none !important } }
+      `}</style>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 16px", background: "#151b21", borderBottom: "1px solid #232c35", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+          <span style={{ fontWeight: 800, fontSize: 20, letterSpacing: 1 }}>BA<span style={{ color: "#2C87C8" }}>R</span>T</span>
+          <span style={{ fontSize: 11, letterSpacing: 3, color: "#8a97a3", fontWeight: 600 }}>OPERATIONS CONTROL</span>
+        </div>
+        {svcOpen && peak && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, color: "#0e1216", background: "#FFB020", borderRadius: 3, padding: "2px 7px", animation: "peakPulse 1.6s ease-in-out infinite" }}>PEAK</span>}
+        {!svcOpen && <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.5, color: "#8a97a3", background: "#1d252d", border: "1px solid #2c3844", borderRadius: 3, padding: "2px 7px" }} title={`System reopens at ${openHour(sim.day)}:00 AM — freeways run all night`}>CLOSED</span>}
+        <div style={{ ...mono, fontSize: 14, color: "#FFB020", marginLeft: "auto" }}>Wk {sim.week} · {DAYNAMES[weekday(sim.day)]} · {fmtClock(sim.clock)}</div>
+        <div style={{ fontSize: 11, color: "#8a97a3", ...mono }} title="Trains in service">🚈 {sim.trains.length}</div>
+        <div style={{ ...mono, fontSize: 13, color: "#FFB020" }} title="Live week score — banks at the Board review">★ {liveScore.toLocaleString()}</div>
+        <div style={{ ...mono, fontSize: 13, color: sim.treasury > 200000 ? "#4DA859" : sim.treasury > 50000 ? "#FFB020" : "#E0403F" }} title="Treasury — hit $0 three times and you're done">
+          🏦 {fmtMoney(sim.treasury)}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setShowTraffic(t => !t)} title="Toggle freeway traffic overlay" style={btn(showTraffic ? "#E0403F" : "#1d252d")}>🚗</button>
+          <button onClick={() => { setSoundOn(s => !s); if (!soundOn) sndChime(); }} title="Toggle sound" style={btn(soundOn ? "#2C87C8" : "#1d252d")}>{soundOn ? "🔊" : "🔇"}</button>
+          {[["rt", "RT"], [1, "1×"], [3, "3×"], [10, "10×"]].map(([sp, label]) => (
+            <button key={label} onClick={() => setSpeed(sp)} title={sp === "rt" ? "Real time — one sim minute per real minute" : undefined} style={btn(speed === sp ? "#2C87C8" : "#1d252d")}>{label}</button>
+          ))}
+          <button onClick={() => setPaused((p) => !p)} style={{ ...btn(paused ? "#4DA859" : "#1d252d"), minWidth: 62 }}>{paused ? "Resume" : "Pause"}</button>
+          <button onClick={resetAll} style={btn("#1d252d", "#8a97a3")}>Reset</button>
+        </div>
+      </div>
+      <div style={{ height: 3, background: "linear-gradient(90deg, #F5C518 0 20%, #E0403F 20% 40%, #F1861D 40% 60%, #4DA859 60% 80%, #2C87C8 80% 100%)" }} />
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* Map */}
+        <div style={{ flex: "1 1 58%", minWidth: 0, position: "relative", background: "radial-gradient(ellipse at 30% 40%, #121a22 0%, #0e1216 70%)" }}>
+          <svg viewBox="0 0 900 790" style={{ width: "100%", height: "100%", display: "block" }}>
+            <path d="M 340 300 Q 300 360 320 430 Q 335 480 300 560 L 260 560 Q 290 470 275 430 Q 255 360 300 300 Z" fill="#16222e" opacity="0.6" />
+            {/* Traffic overlay */}
+            {showTraffic && FREEWAYS.map((f) => {
+              const c = sim.congestion[f.id] || 0;
+              const segs = [];
+              for (let i = 1; i < f.pts.length; i++) {
+                const wig = Math.max(0, Math.min(1, c + 0.07 * Math.sin(i * 2.7 + sim.clock / 23)));
+                segs.push(
+                  <g key={i}>
+                    <line x1={f.pts[i - 1][0]} y1={f.pts[i - 1][1]} x2={f.pts[i][0]} y2={f.pts[i][1]}
+                      stroke="#0a0e12" strokeWidth={8} strokeLinecap="round" opacity={0.9} />
+                    <line x1={f.pts[i - 1][0]} y1={f.pts[i - 1][1]} x2={f.pts[i][0]} y2={f.pts[i][1]}
+                      stroke={congColor(wig)} strokeWidth={4.5} strokeLinecap="round" opacity={0.8}>
+                      <title>{`${f.name} — ${wig > 0.85 ? "jammed" : wig > 0.68 ? "heavy" : wig > 0.45 ? "moderate" : "free flow"}`}</title>
+                    </line>
+                  </g>
+                );
+              }
+              const lp = f.pts[f.labelAt];
+              return (
+                <g key={f.id} opacity={focusLine ? 0.3 : 1}>
+                  {segs}
+                  <g transform={`translate(${lp[0]},${lp[1]})`}>
+                    <rect x={-12} y={-8} width={24} height={15} rx={3} fill="#141a20" stroke="#3d4a56" strokeWidth={1} />
+                    <text x={0} y={3.5} textAnchor="middle" fontSize={8.5} fill="#aab6c1" fontWeight="700" style={{ fontFamily: "Helvetica, Arial, sans-serif" }}>{f.label}</text>
+                  </g>
+                </g>
+              );
+            })}
+            {/* BART lines */}
+            {LINES.map((l) => (
+              <g key={l.id} transform={`translate(${l.offset[0]},${l.offset[1]})`}>
+                <polyline points={GEO[l.id].pts.map((p) => p.join(",")).join(" ")} fill="none" stroke={l.color} strokeWidth={3.2}
+                  strokeLinejoin="round" strokeLinecap="round" style={{ cursor: "pointer" }}
+                  onClick={() => setFocusLine(f => f === l.id ? null : l.id)}
+                  opacity={focusLine && focusLine !== l.id ? 0.08 : (!svcOpen || cfg.lines[l.id].running === false) && trainCounts[l.id] === 0 ? 0.22 : 0.85} />
+              </g>
+            ))}
+            {/* Stations */}
+            {Object.entries(STATIONS).map(([key, st]) => {
+              const cap = stationBaseCap(st.size) * capMult;
+              const ratio = sim.waiting[key] / cap;
+              const closed = !!sim.closed[key];
+              const ring = closed ? "#E0403F" : ratio > 0.85 ? "#E0403F" : ratio > 0.5 ? "#FFB020" : "#3d4a56";
+              return (
+                <g key={key} opacity={focusSet && !focusSet.has(key) ? 0.15 : 1}>
+                  <circle cx={st.x} cy={st.y} r={ratio > 0.85 || closed ? 7 : 5.2} fill="#0e1216" stroke={ring} strokeWidth={ratio > 0.5 || closed ? 2.6 : 1.6}>
+                    <title>{`${st.name}${st.hub ? " (transfer hub)" : ""}${closed ? " — CLOSED" : ""} — ${Math.round(sim.waiting[key])} waiting (max ~${Math.round(cap)})${nextEta[key] !== undefined ? ` · next train ${nextEta[key] < 1 ? "arriving" : Math.round(nextEta[key]) + " min"}` : svcOpen ? " · no train inbound" : ""}`}</title>
+                  </circle>
+                  <circle cx={st.x} cy={st.y} r={2.2} fill={st.hub ? "#FFB020" : "#c7d0d9"} />
+                  {closed && <text x={st.x - 4} y={st.y - 9} fontSize={11} fill="#E0403F" fontWeight="700">✕</text>}
+                  {ratio > 0.85 && !closed && (
+                    <circle cx={st.x} cy={st.y} r={10} fill="none" stroke="#E0403F" strokeWidth={1} opacity={0.5}>
+                      <animate attributeName="r" values="7;13;7" dur="1.4s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" values="0.6;0;0.6" dur="1.4s" repeatCount="indefinite" />
+                    </circle>
+                  )}
+                  {MAJOR_LABELS.has(key) && (
+                    <text x={st.x + 9} y={st.y + 3} fontSize={9.5} fill="#94a1ad" style={{ fontFamily: "Helvetica, Arial, sans-serif", fontWeight: 600 }}>{st.name}</text>
+                  )}
+                </g>
+              );
+            })}
+            {/* Event marker */}
+            {sim.event && sim.clock >= sim.event.start - 60 && sim.clock < sim.event.end && (() => {
+              const st = STATIONS[sim.event.st];
+              return (
+                <text x={st.x - 6} y={st.y - 12} fontSize={15} fill="#FFB020">
+                  ✦
+                  <animate attributeName="opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite" />
+                </text>
+              );
+            })()}
+            {/* Trains */}
+            {sim.trains.map((tr) => {
+              const line = LINES.find((l) => l.id === tr.line);
+              const [x, y] = pointAt(tr.line, tr.dist);
+              const cap = tr.cars * CAP_PER_CAR;
+              const full = tr.load / cap;
+              return (
+                <g key={tr.id} opacity={focusLine && tr.line !== focusLine ? 0.08 : 1} transform={`translate(${x + line.offset[0]},${y + line.offset[1]})`}>
+                  <rect x={-5} y={-3.5} width={10} height={7} rx={2} fill={line.color} stroke={full > 0.9 ? "#fff" : line.dark} strokeWidth={1} opacity={tr.stalled > 0 ? 0.6 : 1}>
+                    <title>{`${line.name} line · ${tr.cars} cars · ${Math.round(tr.load)}/${cap} riders${tr.stalled > 0 ? ` · BROKEN DOWN (${Math.ceil(tr.stalled)} min)` : ""}`}</title>
+                  </rect>
+                  {tr.stalled > 0 && <text x={-5} y={-7} fontSize={11}>⚠️</text>}
+                </g>
+              );
+            })}
+          </svg>
+          <div style={{ position: "absolute", left: 12, bottom: 10, fontSize: 10.5, color: "#8a97a3", background: "rgba(14,18,22,0.85)", padding: "6px 10px", borderRadius: 6, lineHeight: 1.7 }}>
+            <span style={{ color: "#FFB020" }}>●</span> filling &nbsp;<span style={{ color: "#E0403F" }}>●</span> overcrowded &nbsp;<span style={{ color: "#FFB020" }}>◦</span> transfer hub
+            {showTraffic && <> &nbsp;|&nbsp; roads: <span style={{ color: "#3fa14f" }}>▬</span><span style={{ color: "#e8b93a" }}>▬</span><span style={{ color: "#d63a3a" }}>▬</span></>}
+            &nbsp;· click a line to isolate · hover for details
+          </div>
+          {/* Toasts */}
+          <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", gap: 6, zIndex: 5, pointerEvents: "none", width: "min(92%, 430px)" }}>
+            {sim.toasts.filter(t => t.exp > Date.now()).map(t => (
+              <div key={t.id} style={{ ...toneBox(t.tone), borderRadius: 6, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, textAlign: "center", animation: "bopIn 0.25s ease-out", boxShadow: "0 4px 14px rgba(0,0,0,0.5)" }}>{t.text}</div>
+            ))}
+          </div>
+        </div>
+
+        {/* Panel */}
+        <div style={{ flex: "0 0 360px", maxWidth: "46%", display: "flex", flexDirection: "column", minHeight: 0, background: "#141a20", borderLeft: "1px solid #232c35" }}>
+          <div style={{ padding: "14px 14px 0" }}>
+          <div style={{ padding: "9px 12px", borderRadius: 6, fontSize: 12.5, lineHeight: 1.45, marginBottom: 10, background: advisor.tone === "bad" ? "#2c1517" : advisor.tone === "warn" ? "#2a2210" : advisor.tone === "good" ? "#14261a" : "#1a222a", border: `1px solid ${advisor.tone === "bad" ? "#E0403F" : advisor.tone === "warn" ? "#FFB020" : advisor.tone === "good" ? "#4DA859" : "#2c3844"}` }}>
+            {advisor.text}
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#8a97a3", marginBottom: 4 }}>
+              <span style={{ letterSpacing: 2, fontWeight: 700 }}>RIDER SATISFACTION</span>
+              <span style={mono}>{Math.round(sim.satisfaction)}%{sim.strikes > 0 && <span style={{ color: "#E0403F" }}> · {sim.strikes} strike</span>}</span>
+            </div>
+            <div style={{ height: 8, background: "#0f1418", borderRadius: 4, overflow: "hidden", border: "1px solid #232c35" }}>
+              <div style={{ width: `${sim.satisfaction}%`, height: "100%", background: sim.satisfaction > 60 ? "#4DA859" : sim.satisfaction > 30 ? "#FFB020" : "#E0403F", transition: "width 0.3s" }} />
+            </div>
+          </div>
+
+          {sim.qParts.q !== undefined && (
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              {[["Waits", (sim.qParts.wait || 0) + (sim.qParts.give || 0), 60], ["Crowding", sim.qParts.crush || 0, 34], ["Reliability", sim.qParts.rel || 0, 22], ["Fares", sim.qParts.fare || 0, 18]].map(([lbl, v, max]) => (
+                <div key={lbl} style={{ flex: 1 }} title={`${lbl}: −${Math.round(v)} sentiment right now`}>
+                  <div style={{ fontSize: 8.5, letterSpacing: 0.5, color: "#8a97a3", fontWeight: 700 }}>{String(lbl).toUpperCase()}</div>
+                  <div style={{ height: 4, background: "#0f1418", borderRadius: 2, overflow: "hidden", border: "1px solid #232c35" }}>
+                    <div style={{ width: `${Math.min(100, (v / max) * 100)}%`, height: "100%", background: v / max > 0.55 ? "#E0403F" : v / max > 0.25 ? "#FFB020" : "#4DA859", transition: "width 0.4s" }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ fontSize: 10, color: "#5c6a76", marginBottom: 10 }} title="Reputation is the long memory of your service. It feeds demand: good weeks grow ridership, bad weeks bleed it.">
+            Reputation {Math.round(sim.reputation)} → demand ×{(REP_LO + REP_SPAN * sim.reputation / 100).toFixed(2)}
+          </div>
+
+          {/* Fleet & tube gauges — the two hard constraints */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ flex: 1, background: "#0f1418", border: "1px solid #232c35", borderRadius: 6, padding: "7px 9px" }}
+              title={`${Math.round(carsInService)} cars in service · ${Math.round(carsTurning)} turning back at terminals · ${Math.round(sim.carsIdle)} idle in yards · ${fleetOwned} usable fleet`}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, letterSpacing: 1, color: "#8a97a3", fontWeight: 700 }}>
+                <span>FLEET</span><span style={mono}>{Math.round(carsInService)}/{fleetOwned}</span>
+              </div>
+              <div style={{ height: 5, background: "#0a0e12", borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div style={{ width: `${fleetUsePct}%`, height: "100%", background: fleetUsePct > 92 ? "#E0403F" : fleetUsePct > 75 ? "#FFB020" : "#4DA859" }} />
+              </div>
+              <div style={{ fontSize: 9.5, color: sim.carsIdle < 20 ? "#E0403F" : "#5c6a76", marginTop: 2 }}>
+                {Math.round(sim.carsIdle)} idle · {Math.round(carsTurning)} turning
+              </div>
+            </div>
+            <div style={{ flex: 1, background: "#0f1418", border: "1px solid #232c35", borderRadius: 6, padding: "7px 9px" }}
+              title={`Transbay Tube: ${tubeTph.toFixed(1)} trains/hour scheduled against a hard ceiling of ${TUBE_CAPACITY_TPH}. Over that, trains queue at the portal.`}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9.5, letterSpacing: 1, color: "#8a97a3", fontWeight: 700 }}>
+                <span>TUBE</span><span style={mono}>{tubeTph.toFixed(0)}/{TUBE_CAPACITY_TPH} tph</span>
+              </div>
+              <div style={{ height: 5, background: "#0a0e12", borderRadius: 3, overflow: "hidden", marginTop: 3 }}>
+                <div style={{ width: `${tubePct}%`, height: "100%", background: tubeTph > TUBE_CAPACITY_TPH ? "#E0403F" : tubePct > 88 ? "#FFB020" : "#4DA859" }} />
+              </div>
+              <div style={{ fontSize: 9.5, color: tubeTph > TUBE_CAPACITY_TPH ? "#E0403F" : "#5c6a76", marginTop: 2 }}>
+                {tubeTph > TUBE_CAPACITY_TPH ? "over capacity — queuing" : "within capacity"}
+              </div>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+            {[["service", "Service"], ["money", "Money"], ["city", "City"], ["scores", "Scores"]].map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "6px 0", fontSize: 12, fontWeight: 700, letterSpacing: 0.5, background: tab === id ? "#2C87C8" : "#0f1418", color: tab === id ? "#fff" : "#8a97a3", border: "1px solid #232c35", borderRadius: 5, cursor: "pointer" }}>{label}</button>
+            ))}
+          </div>
+          </div>
+
+          <div style={{ flex: 1, overflowY: "auto", padding: "0 14px 14px", minHeight: 0 }}>
+          {tab === "service" && (
+            <>
+              <div style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                <Slider label={`Fare $${cfg.fare.toFixed(2)}`} unit="" min={2} max={10} step={0.25} value={cfg.fare} onChange={(v) => setSettings(s => ({ ...s, fare: v }))} accent="#FFB020" />
+                <div style={{ fontSize: 10.5, color: "#5c6a76", lineHeight: 1.5 }}>Raise it and riders defect to the freeway (watch the roads redden). Lower it and platforms swell.</div>
+              </div>
+              {focusStats && (
+                <div style={{ background: "#0f1418", border: `1.5px solid ${focusLineObj.color}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <span style={{ width: 12, height: 12, borderRadius: 3, background: focusLineObj.color }} />
+                    <span style={{ fontWeight: 800, fontSize: 13 }}>{focusLineObj.name} line — isolated</span>
+                    <button onClick={() => setFocusLine(null)} style={{ ...btn("#1d252d", "#8a97a3"), marginLeft: "auto", padding: "2px 8px", fontSize: 10.5 }}>unfocus</button>
+                  </div>
+                  <div style={{ fontSize: 11.5, lineHeight: 1.8, color: "#c7d0d9", ...mono }}>
+                    {focusStats.trs} trains · {focusStats.cars} cars committed · avg load {Math.round(focusStats.avgLoad * 100)}%<br />
+                    burn {fmtMoney(focusStats.lineCostRate)}/min · boardings today {Math.round(focusStats.boardings).toLocaleString()} (≈{fmtMoney(focusStats.boardings * cfg.fare)})<br />
+                    busiest: {STATIONS[focusStats.busiest].name}
+                  </div>
+                  {focusStats.crowdedOnLine.length > 0 && (
+                    <div style={{ fontSize: 11, color: "#FFB020", marginTop: 4 }}>⚠ crowding at {focusStats.crowdedOnLine.slice(0, 3).map(k => STATIONS[k].name).join(", ")}</div>
+                  )}
+                  <div style={{ fontSize: 10.5, color: "#5c6a76", marginTop: 6 }}>
+                    Avg load under ~35%? You're over-serving. Pegged near 100% with crowding? Add cars or trains.
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button onClick={() => setSettings(s => ({ ...s, lines: Object.fromEntries(Object.entries(s.lines).map(([id, v]) => [id, { ...v, running: id === focusLine }])) }))} style={{ ...btn("#1d252d", "#e0c07d"), fontSize: 10.5 }}>Solo (park other lines)</button>
+                    <button onClick={() => setSettings(s => ({ ...s, lines: Object.fromEntries(Object.entries(s.lines).map(([id, v]) => [id, { ...v, running: true }])) }))} style={{ ...btn("#1d252d", "#8fd3a0"), fontSize: 10.5 }}>Run all</button>
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>
+                SERVICE PLAN <span style={{ fontWeight: 400, letterSpacing: 0, textTransform: "none" }}>· peak = 6–9a, 3–7p</span>
+              </div>
+              {LINES.map((l) => {
+                const lc = cfg.lines[l.id];
+                return (
+                  <div key={l.id} style={{ background: "#0f1418", border: focusLine === l.id ? `1.5px solid ${l.color}` : "1px solid #232c35", borderRadius: 8, padding: "10px 12px", marginBottom: 8, opacity: lc.running ? 1 : 0.55 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <span style={{ width: 12, height: 12, borderRadius: 3, background: l.color }} />
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{l.name}</span>
+                      <span style={{ fontSize: 10, color: "#8a97a3" }}>{l.route}</span>
+                      <span style={{ marginLeft: "auto", fontSize: 10.5, color: "#8a97a3", ...mono }}>{trainCounts[l.id]} trains</span>
+                      <button onClick={() => setFocusLine(f => f === l.id ? null : l.id)} title="Isolate this line on the map"
+                        style={{ ...btn(focusLine === l.id ? l.color : "#1d252d", focusLine === l.id ? "#0e1216" : "#8a97a3"), padding: "2px 7px", fontSize: 10.5, fontWeight: 700 }}>⌖</button>
+                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#8a97a3", cursor: "pointer" }}>
+                        <input type="checkbox" checked={lc.running} onChange={(e) => updateLine(l.id, "running", e.target.checked)} /> run
+                      </label>
+                    </div>
+                    {[["peak", "Peak"], ["off", "Off-peak"]].map(([pk, plabel]) => (
+                      <div key={pk} style={{ marginBottom: 2 }}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 1, color: (pk === "peak") === peak ? "#FFB020" : "#5c6a76", marginBottom: 1 }}>
+                          {plabel.toUpperCase()} {(pk === "peak") === peak && "· ACTIVE"}
+                        </div>
+                        <Slider label="every" unit="m" min={2} max={30} value={lc[pk].headway} onChange={(v) => updatePlan(l.id, pk, "headway", v)} accent={l.color} />
+                        <Slider label="cars" unit="" min={4} max={10} value={lc[pk].cars} onChange={(v) => updatePlan(l.id, pk, "cars", v)} accent={l.color} />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {tab === "money" && (
+            <>
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>TODAY'S LEDGER</div>
+              <div style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: 12, marginBottom: 12, ...mono }}>
+                <Row label="Fare revenue" value={fmtMoney(sim.revToday)} color="#4DA859" />
+                <Row label="Operating cost" value={fmtMoney(-sim.costToday)} color="#E0403F" />
+                <div style={{ borderTop: "1px solid #232c35", margin: "6px 0" }} />
+                <Row label="Net today" value={fmtMoney(netToday)} color={netToday >= 0 ? "#4DA859" : "#E0403F"} big />
+                <Row label="Right now" value={`${fmtMoney(netRate)}/min`} color={netRate >= 0 ? "#4DA859" : "#FFB020"} />
+                <Row label="Week to date" value={fmtMoney(wtdNet)} color={wtdNet >= 0 ? "#4DA859" : "#E0403F"} />
+                <Row label="Treasury" value={fmtMoney(sim.treasury)} color={sim.treasury > 200000 ? "#4DA859" : "#FFB020"} />
+                <Row label="Bailouts used" value={`${sim.bailouts} / 3`} color={sim.bailouts ? "#E0403F" : "#8a97a3"} />
+                <div style={{ borderTop: "1px solid #232c35", margin: "6px 0" }} />
+                <Row label="Riders carried" value={Math.round(sim.riders).toLocaleString()} color="#c7d0d9" />
+                <Row label="Gave up waiting" value={Math.round(sim.giveUps).toLocaleString()} color={sim.giveUps > 500 ? "#E0403F" : "#8a97a3"} />
+                <Row label="Departures held" value={Math.round(sim.heldToday).toLocaleString()} color={sim.heldToday > 5 ? "#E0403F" : "#8a97a3"} />
+                {sim.yesterday && <Row label={`Day ${sim.yesterday.day} net`} value={fmtMoney(sim.yesterday.net)} color={sim.yesterday.net >= 0 ? "#4DA859" : "#E0403F"} />}
+              </div>
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>CAPITAL PROGRAM</div>
+              {UPGRADES.map((u) => {
+                const lvl = sim.upgrades[u.id];
+                const cost = u.base * (lvl + 1);
+                const maxed = lvl >= u.max;
+                const afford = sim.treasury >= cost;
+                return (
+                  <div key={u.id} style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: "9px 12px", marginBottom: 7, display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700 }}>{u.name} <span style={{ color: "#FFB020", fontSize: 10.5 }}>{"■".repeat(lvl)}{"□".repeat(u.max - lvl)}</span></div>
+                      <div style={{ fontSize: 10.5, color: "#8a97a3" }}>{u.desc}</div>
+                    </div>
+                    <button disabled={maxed || !afford} onClick={() => buyUpgrade(u)} style={{ ...btn(maxed ? "#1d252d" : afford ? "#4DA859" : "#1d252d", maxed || !afford ? "#5c6a76" : "#fff"), fontSize: 11, cursor: maxed || !afford ? "default" : "pointer", ...mono }}>
+                      {maxed ? "MAX" : fmtMoney(cost)}
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {tab === "city" && (
+            <>
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>OAKLAND → SFO, RIGHT NOW</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <div style={{ flex: 1, background: "#0f1418", border: `2px solid ${bartWins ? "#2C87C8" : "#232c35"}`, borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10.5, color: "#8a97a3", fontWeight: 700, letterSpacing: 1 }}>🚈 BART (Yellow)</div>
+                  <div style={{ ...mono, fontSize: 24, fontWeight: 700, color: bartWins ? "#7fb3dc" : "#c7d0d9" }}>
+                    {bartMin === null ? "—" : Math.round(bartMin) + "m"}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#8a97a3" }}>
+                    {bartMin === null ? (svcOpen ? "no service!" : `closed — reopens ${openHour(sim.day)}:00 AM`) : `$${bartCost.toFixed(2)} incl. SFO surcharge`}
+                    {sfCrowded && bartMin !== null && <div style={{ color: "#FFB020" }}>+wait: downtown platforms packed</div>}
+                  </div>
+                </div>
+                <div style={{ flex: 1, background: "#0f1418", border: `2px solid ${!bartWins ? "#E0403F" : "#232c35"}`, borderRadius: 8, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 10.5, color: "#8a97a3", fontWeight: 700, letterSpacing: 1 }}>🚗 DRIVE (880→101)</div>
+                  <div style={{ ...mono, fontSize: 24, fontWeight: 700, color: congColor(driveCong) }}>{Math.round(driveMin)}m</div>
+                  <div style={{ fontSize: 10.5, color: "#8a97a3" }}>~${driveCost} gas+toll, plus SFO parking</div>
+                </div>
+              </div>
+
+              {sim.event && sim.clock < sim.event.end && (
+                <div style={{ background: "#241d0e", border: "1px solid #FFB020", borderRadius: 8, padding: "9px 12px", marginBottom: 12, fontSize: 12 }}>
+                  ✦ <b>{sim.event.name}</b> — {fmtClock(sim.event.start)}–{fmtClock(sim.event.end)} at {STATIONS[sim.event.st].name}
+                  {sim.clock >= sim.event.start ? <span style={{ color: "#FFB020" }}> · IN PROGRESS</span> : <span style={{ color: "#8a97a3" }}> · upcoming</span>}
+                </div>
+              )}
+
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>RIDER FEED</div>
+              <div style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: "6px 10px", maxHeight: 300, overflowY: "auto" }}>
+                {sim.feed.map((m, i) => (
+                  <div key={i} style={{ fontSize: 11.5, lineHeight: 1.45, padding: "5px 0", borderBottom: i < sim.feed.length - 1 ? "1px solid #1a222a" : "none" }}>
+                    <span style={{ color: "#5c6a76", ...mono, fontSize: 10 }}>{fmtClock(m.t)}</span>{" "}
+                    <span style={{ color: feedColor[m.tone] || "#c7d0d9" }}>{m.text}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {tab === "scores" && (
+            <>
+              <div style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700, marginBottom: 6 }}>THIS WEEK'S SCORE (LIVE)</div>
+              <div style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ ...mono, fontSize: 30, fontWeight: 800, color: liveScore > topScore && topScore > 0 ? "#FFB020" : "#c7d0d9" }}>
+                  {liveScore.toLocaleString()}{liveScore > topScore && topScore > 0 && <span style={{ fontSize: 12 }}> ★ record pace</span>}
+                </div>
+                <div style={{ fontSize: 10.5, color: "#8a97a3", lineHeight: 1.7, marginTop: 4 }}>
+                  = (riders ÷ 10 + net$ ÷ 25 − abandoned ÷ 2) × satisfaction multiplier (currently ×{(0.5 + sim.satisfaction / 100).toFixed(2)})<br />
+                  Hit all three Board targets for a ×1.25 bonus. Score banks at each weekly review.
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 11, letterSpacing: 2, color: "#8a97a3", fontWeight: 700 }}>LEADERBOARD</span>
+                {leaders.length > 0 && <button onClick={clearLeaderboard} style={{ ...btn("#1d252d", "#5c6a76"), marginLeft: "auto", fontSize: 10 }}>clear</button>}
+              </div>
+              <div style={{ background: "#0f1418", border: "1px solid #232c35", borderRadius: 8, padding: "6px 12px", marginBottom: 12 }}>
+                {leaders.length === 0 && <div style={{ fontSize: 11.5, color: "#5c6a76", padding: "8px 0" }}>No scores banked yet — survive to your first weekly review.</div>}
+                {leaders.map((e, i) => (
+                  <div key={i} style={{ display: "flex", gap: 10, fontSize: 12, padding: "5px 0", borderBottom: i < leaders.length - 1 ? "1px solid #1a222a" : "none", ...mono }}>
+                    <span style={{ color: i === 0 ? "#FFB020" : "#5c6a76", width: 22 }}>{i + 1}.</span>
+                    <span style={{ fontWeight: 700, width: 46 }}>{e.name}</span>
+                    <span style={{ color: "#c7d0d9", flex: 1 }}>{e.score.toLocaleString()}</span>
+                    <span style={{ color: "#8a97a3", fontSize: 10.5 }}>wk{e.week} · {fmtMoney(e.net)} · sat {Math.round(e.sat)}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div style={{ fontSize: 10.5, color: "#5c6a76", lineHeight: 1.6, marginTop: 12 }}>
+            The Board reviews you every 7 days. Two failed reviews in a row, or three bailouts, and you'll be spending more time with your family.
+          </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Setup phase — panel stays fully usable before the week begins */}
+      {!started && (
+        <div style={{ position: "absolute", top: 64, left: 16, zIndex: 6, background: "#151b21", border: "1px solid #2c3844", borderRadius: 10, padding: "14px 18px", width: "min(46%, 400px)", boxShadow: "0 8px 30px rgba(0,0,0,0.55)" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>Monday, 4:40 AM — set up your week</div>
+          <div style={{ fontSize: 12, color: "#c7d0d9", lineHeight: 1.7, marginBottom: 10 }}>
+            Adjust the fare, headways, and cars per line before service opens. You have a
+            finite fleet of {FLEET_AVAILABLE} railcars — a train can't leave until cars come back
+            and turn around, and the Transbay Tube tops out at {TUBE_CAPACITY_TPH} trains an hour.
+            Trains run 5 AM–midnight weekdays (Sat 6 AM, Sun 8 AM); overnight the trains go
+            dark but the freeways don't.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button onClick={() => setStarted(true)} style={{ ...btn("#4DA859"), padding: "8px 24px", fontSize: 13, fontWeight: 700 }}>Begin week ▶</button>
+            <span style={{ fontSize: 10.5, color: "#5c6a76" }}>space = pause · RT = real time</span>
+          </div>
+        </div>
+      )}
+
+      {/* Weekly Board Review */}
+      {sim.review && (
+        <Overlay>
+          <div style={{ fontSize: 11, letterSpacing: 3, color: "#8a97a3", fontWeight: 700 }}>BOARD OF DIRECTORS</div>
+          <div style={{ fontSize: 22, fontWeight: 800, margin: "4px 0 2px" }}>Week {sim.review.week} Review</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, margin: "10px 0" }}>
+            <div style={{ fontSize: 54, fontWeight: 900, ...mono, color: sim.review.grade <= "B" ? "#4DA859" : sim.review.grade === "C" ? "#FFB020" : "#E0403F" }}>{sim.review.grade}</div>
+            <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+              {sim.review.targets.map((t, i) => (
+                <div key={i}><span style={{ color: t.met ? "#4DA859" : "#E0403F" }}>{t.met ? "✓" : "✗"}</span> {t.label} <span style={{ color: "#8a97a3", ...mono }}>({t.val})</span></div>
+              ))}
+            </div>
+          </div>
+          <div style={{ ...mono, fontSize: 15, margin: "2px 0 8px" }}>
+            <span style={{ color: "#8a97a3" }}>WEEK SCORE </span>
+            <span style={{ fontWeight: 800, color: "#FFB020", fontSize: 20 }}>{sim.review.score.toLocaleString()}</span>
+            {sim.review.allMet && <span style={{ color: "#4DA859", fontSize: 11 }}> ×1.25 all targets</span>}
+            {sim.review.score > topScore && <span style={{ color: "#FFB020", fontSize: 11 }}> ★ NEW HIGH SCORE</span>}
+          </div>
+          <div style={{ display: "flex", gap: 20, margin: "8px 0 14px" }}>
+            <MiniBars title="Daily net" vals={sim.review.wk.map(r => r.net)} money />
+            <MiniBars title="Daily riders" vals={sim.review.wk.map(r => r.riders)} />
+          </div>
+          <div style={{ fontSize: 12, color: "#c7d0d9", lineHeight: 1.7, marginBottom: 14 }}>
+            {Math.round(sim.review.riders).toLocaleString()} riders carried · busiest station <b>{STATIONS[sim.review.best].name}</b>
+            {sim.review.give > 1000 && <> · most riders abandoned at <b style={{ color: "#E0403F" }}>{STATIONS[sim.review.worst].name}</b></>}
+          </div>
+          <div style={{ fontSize: 12.5, fontStyle: "italic", color: sim.review.fired ? "#E0403F" : sim.review.pass ? "#8fd3a0" : "#e0c07d", marginBottom: 16 }}>
+            {sim.review.fired ? "\u201cWe've decided to go in a different direction. Security will walk you out.\u201d"
+              : sim.review.pass ? "\u201cAcceptable work, operator. Don't let it go to your head.\u201d"
+              : "\u201cThis is a warning. One more week like this and we make a change.\u201d"}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input value={initials} maxLength={4} onChange={(e) => setInitials(e.target.value.toUpperCase())}
+              title="Your operator initials for the leaderboard"
+              style={{ width: 60, background: "#0f1418", border: "1px solid #2c3844", borderRadius: 4, color: "#FFB020", padding: "7px 8px", fontSize: 13, textAlign: "center", ...mono }} />
+            <button onClick={() => {
+              const r = sim.review;
+              if (savedWeek < r.week) {
+                commitScore({ name: (initials || "OPS").trim() || "OPS", score: r.score, week: r.week, net: r.net, riders: r.riders, sat: r.avgSat });
+                setSavedWeek(r.week);
+                if (r.score > topScore && topScore > 0) pushToast(simRef.current, "🏆 NEW HIGH SCORE BANKED", "good");
+              }
+              sim.review = null;
+              if (r.fired) sim.gameOver = { reason: "fired" };
+            }} style={{ ...btn("#2C87C8"), padding: "8px 22px", fontSize: 13 }}>
+              {sim.review.fired ? "Bank score & accept fate" : "Bank score & back to work"}
+            </button>
+          </div>
+        </Overlay>
+      )}
+
+      {/* Game over */}
+      {sim.gameOver && (
+        <Overlay>
+          <div style={{ fontSize: 40, marginBottom: 4 }}>🚧</div>
+          <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 8 }}>
+            {sim.gameOver.reason === "fired" ? "Fired by the Board" : "Seized by the State"}
+          </div>
+          <div style={{ fontSize: 13, color: "#c7d0d9", lineHeight: 1.7, maxWidth: 420, marginBottom: 8 }}>
+            {sim.gameOver.reason === "fired"
+              ? "Two failed reviews in a row. Your successor has already promised the press \u201ca new era of reliability.\u201d Good luck to them."
+              : "Three emergency bailouts in, Sacramento has appointed a receiver. Your badge stops working at midnight."}
+          </div>
+          <div style={{ fontSize: 12.5, color: "#8a97a3", ...mono, marginBottom: 18 }}>
+            Survived {sim.day} days · {Math.round(sim.lifeRiders).toLocaleString()} riders carried
+          </div>
+          <button onClick={resetAll} style={{ ...btn("#4DA859"), padding: "8px 22px", fontSize: 13 }}>New administration</button>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
+const MAJOR_LABELS = new Set(["rich","antc","brya","dubl","sfia","mlbr","daly","embr","powl","mcar","n12","dbrk","bayf","frmt","cols","wcrk","woak","lake"]);
+
+function btn(bg, color = "#fff") {
+  return { background: bg, color, border: "1px solid #2c3844", borderRadius: 4, padding: "4px 10px", fontSize: 12, cursor: "pointer" };
+}
+
+function Overlay({ children }) {
+  return (
+    <div style={{ position: "absolute", inset: 0, background: "rgba(8,11,14,0.82)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>
+      <div style={{ background: "#151b21", border: "1px solid #2c3844", borderRadius: 12, padding: "22px 28px", maxWidth: 520, width: "90%", maxHeight: "85vh", overflowY: "auto" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value, color, big }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: big ? 15 : 12, padding: "2px 0", fontWeight: big ? 700 : 400 }}>
+      <span style={{ color: "#8a97a3" }}>{label}</span>
+      <span style={{ color }}>{value}</span>
+    </div>
+  );
+}
+
+function Slider({ label, unit, min, max, value, onChange, accent, step = 1 }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+      <span style={{ fontSize: 11, color: "#8a97a3", width: 64, flexShrink: 0 }}>{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} style={{ flex: 1, accentColor: accent }} />
+      <span style={{ fontSize: 11.5, width: 40, textAlign: "right", fontFamily: "'SF Mono', Consolas, monospace" }}>{value}{unit}</span>
+    </div>
+  );
+}
+
+function MiniBars({ title, vals, money }) {
+  const maxAbs = Math.max(1, ...vals.map(v => Math.abs(v)));
+  const W = 150, H = 56, bw = W / vals.length - 4;
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: "#8a97a3", fontWeight: 700, letterSpacing: 1, marginBottom: 3 }}>{title.toUpperCase()}</div>
+      <svg width={W} height={H}>
+        <line x1={0} y1={H / 2} x2={W} y2={H / 2} stroke="#232c35" strokeWidth={1} />
+        {vals.map((v, i) => {
+          const h = Math.abs(v) / maxAbs * (H / 2 - 4);
+          const up = v >= 0;
+          return <rect key={i} x={i * (W / vals.length) + 2} y={up ? H / 2 - h : H / 2} width={bw} height={Math.max(1, h)}
+            fill={money ? (up ? "#4DA859" : "#E0403F") : "#2C87C8"} rx={1.5} />;
+        })}
+      </svg>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<BartOps />);
+</script>
+</body>
+</html>
