@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d2130">
+<title>BORT Sim: Bay Area operations games</title>
+<meta name="description" content="Four free browser sims about the Bay Area: run the BORT rail system, run a container crane at Port New Oakland, fly under the Golden Gate Bridge, or steer the weather in Upstream.">
+<meta property="og:title" content="BORT Sim: Bay Area operations games">
+<meta property="og:description" content="Run the BORT rail system, a container crane at Port New Oakland or the Bay Area's weather, or fly under the Golden Gate. Free, in your browser.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://bortsim.com/">
+<meta property="og:image" content="https://bortsim.com/share-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="BORT OPS and Port New Oakland: two Bay Area operations sims at bortsim.com">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://bortsim.com/share-card.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚆</text></svg>">
+<script>window.va=window.va||function(){(window.vaq=window.vaq||[]).push(arguments);};</script>
+<script defer src="/_vercel/insights/script.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@700;800;900&family=Barlow:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bay:#0d2130; --fog:#d8e0e4; --dim:#9db0bb; --rail:#123641; --port:#0f2638;
+  --l-yellow:#f2c230; --l-red:#e0503c; --l-blue:#3aa7e6; --l-green:#3dba74; --l-orange:#f28a2e;
+  --safety:#f2b705; --steel:#cfd8dd;
+  --gate:#1a2238; --io:#e05a3a; --lab:#0f2b33; --teal:#45d6c8; --ar1:#ffe066; --ar3:#ff7b54; --ar5:#b76cff;
+  --display:'Big Shoulders Display','Arial Narrow',Impact,sans-serif;
+  --body:'Barlow',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  color-scheme:dark; box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bay:#0d2130;--fog:#d8e0e4;}}
+:root[data-theme="dark"]{--bay:#0d2130;--fog:#d8e0e4;}
+*,*::before,*::after{box-sizing:inherit;}
+html{scroll-padding-top:env(safe-area-inset-top,0px);}
+body{margin:0;min-height:100%;background:var(--bay);color:var(--fog);font-family:var(--body);-webkit-font-smoothing:antialiased;}
+a{color:inherit;}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:22px clamp(18px,4vw,48px) 18px;}
+.top h1{font-family:var(--display);font-weight:900;font-size:clamp(34px,5vw,58px);line-height:.95;margin:0;letter-spacing:.005em;}
+.top p{margin:0;max-width:54ch;color:var(--dim);font-size:16px;line-height:1.45;}
+.split{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:rgba(216,224,228,.12);min-height:calc(100vh - 120px);min-height:calc(100dvh - 120px);border-top:1px solid rgba(216,224,228,.12);}
+.sim{position:relative;display:flex;flex-direction:column;padding:clamp(18px,3vw,36px) clamp(18px,4vw,48px) clamp(26px,4vw,44px);isolation:isolate;}
+.sim.rail{background:var(--rail);}
+.sim.port{background:var(--port);}
+.sim.gate{background:var(--gate);}
+.sim.lab{background:var(--lab);}
+.scene{width:100%;height:auto;display:block;margin:0 0 22px;border-radius:14px;overflow:hidden;}
+.sim h2{font-family:var(--display);font-weight:800;font-size:clamp(40px,5.2vw,72px);line-height:.9;margin:0 0 10px;letter-spacing:.01em;text-wrap:balance;}
+.sim .pitch{font-size:18px;line-height:1.5;max-width:40ch;margin:0 0 14px;}
+.sim ul{list-style:none;padding:0;margin:0 0 22px;display:grid;gap:7px;max-width:44ch;}
+.sim li{display:flex;gap:10px;align-items:baseline;color:var(--dim);font-size:15.5px;line-height:1.4;}
+.sim li::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;transform:translateY(-1px);}
+.rail li:nth-child(1)::before{background:var(--l-yellow);} .rail li:nth-child(2)::before{background:var(--l-red);} .rail li:nth-child(3)::before{background:var(--l-blue);}
+.port li::before{background:var(--safety);border-radius:2px;}
+.gate li::before{background:var(--io);width:12px;height:3px;border-radius:2px;transform:translateY(-4px);}
+.lab li::before{border-radius:0 50% 50% 50%;transform:translateY(-1px) rotate(45deg);}
+.lab li:nth-child(1)::before{background:var(--ar1);} .lab li:nth-child(2)::before{background:var(--ar3);} .lab li:nth-child(3)::before{background:var(--ar5);}
+.go{margin-top:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.play{display:inline-block;font-family:var(--display);font-weight:800;font-size:24px;letter-spacing:.02em;text-decoration:none;padding:12px 22px 11px;border-radius:10px;border:2px solid transparent;}
+.rail .play{background:var(--fog);color:var(--rail);}
+.port .play{background:var(--safety);color:#10263a;}
+.gate .play{background:var(--io);color:#1f0f0a;}
+.lab .play{background:var(--teal);color:#06201d;}
+.play:hover{filter:brightness(1.08);}
+.play:focus-visible{outline:3px solid var(--fog);outline-offset:3px;}
+.play::after{content:"";position:absolute;inset:0;z-index:-1;}
+.sim:hover .scene{filter:brightness(1.08);}
+.note{font-size:14px;color:var(--dim);margin:-8px 0 20px;}
+footer{padding:16px clamp(18px,4vw,48px) 26px;color:var(--dim);font-size:14px;border-top:1px solid rgba(216,224,228,.12);}
+/* the one orchestrated moment: the train pulls in, the box comes down, the plane goes under, the river comes ashore */
+.train{animation:pullin 2.4s cubic-bezier(.2,.7,.2,1) .15s both;}
+@keyframes pullin{from{transform:translateX(-470px);}to{transform:translateX(0);}}
+.lift{animation:lower 2.2s cubic-bezier(.4,.1,.2,1) .5s both;}
+@keyframes lower{from{transform:translateY(-34px);}to{transform:translateY(0);}}
+.rope{animation:rope 2.2s cubic-bezier(.4,.1,.2,1) .5s both;transform-box:fill-box;transform-origin:top;}
+@keyframes rope{from{transform:scaleY(.45);}to{transform:scaleY(1);}}
+.plane{animation:under 2.6s cubic-bezier(.2,.7,.2,1) .35s both;}
+@keyframes under{from{transform:translateX(360px);}to{transform:translateX(0);}}
+.river{animation:ashore 2.4s cubic-bezier(.2,.7,.2,1) .3s both;}
+@keyframes ashore{from{transform:translateX(-380px);}to{transform:translateX(0);}}
+.rain{animation:rainin .9s ease-out 2.1s both;}
+@keyframes rainin{from{opacity:0;}to{opacity:1;}}
+@media (prefers-reduced-motion:reduce){.train,.lift,.rope,.plane,.river,.rain{animation:none;}}
+@media (min-width:1600px){
+  .split{grid-template-columns:repeat(4,minmax(0,1fr));}
+  .sim h2{font-size:clamp(40px,3.1vw,60px);}
+}
+@media (max-width:820px){
+  .split{grid-template-columns:1fr;min-height:0;}
+  .sim h2{font-size:clamp(40px,11vw,60px);}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Pick your shift</h1>
+  <p>Four sims about the Bay Area: run its trains, its cranes and its weather, or fly under the Golden Gate. All are free and run in your browser.</p>
+</header>
+<main class="split">
+  <section class="sim rail" aria-labelledby="bort-h">
+    <svg class="scene" viewBox="0 0 600 250" role="img" aria-label="A BORT train on an elevated track at dusk">
+      <defs><linearGradient id="rsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b4a57"/><stop offset="1" stop-color="#0f2f39"/></linearGradient></defs>
+      <rect width="600" height="250" fill="url(#rsky)"/>
+      <path d="M0 150 C80 118 150 132 220 112 C300 90 360 120 430 104 C500 90 560 108 600 98 V250 H0Z" fill="#0c2831"/>
+      <g fill="none" stroke-width="5" stroke-linecap="round" opacity=".5">
+        <path d="M30 60 H200 L250 90 H570" stroke="#f2c230"/><path d="M30 76 H190 L240 106 H420 L470 70 H570" stroke="#e0503c"/>
+        <path d="M120 30 L240 90" stroke="#3aa7e6"/><path d="M60 118 L200 104 L250 98" stroke="#3dba74"/><path d="M420 106 L520 140" stroke="#f28a2e"/>
+      </g>
+      <g fill="#d8e0e4"><circle cx="200" cy="60" r="5"/><circle cx="250" cy="90" r="6"/><circle cx="420" cy="106" r="5"/><circle cx="470" cy="70" r="5"/></g>
+      <g fill="#6d8791"><rect x="0" y="178" width="600" height="12"/><rect x="40" y="190" width="14" height="60"/><rect x="190" y="190" width="14" height="60"/><rect x="340" y="190" width="14" height="60"/><rect x="490" y="190" width="14" height="60"/></g>
+      <g class="train">
+        <g transform="translate(96 146)">
+          <rect x="0" y="0" width="96" height="32" rx="5" fill="#cfd8dd"/><rect x="100" y="0" width="96" height="32" rx="5" fill="#cfd8dd"/><rect x="200" y="0" width="96" height="32" rx="5" fill="#cfd8dd"/>
+          <path d="M300 0 H372 Q392 2 398 22 L400 32 H300Z" fill="#cfd8dd"/>
+          <rect x="0" y="22" width="400" height="4" fill="#3aa7e6"/>
+          <g fill="#17313b"><rect x="10" y="7" width="76" height="11" rx="2"/><rect x="110" y="7" width="76" height="11" rx="2"/><rect x="210" y="7" width="76" height="11" rx="2"/><path d="M310 7 H368 Q382 9 386 18 H310Z"/></g>
+          <circle cx="394" cy="27" r="2.6" fill="#fff4c2"/>
+        </g>
+      </g>
+    </svg>
+    <h2 id="bort-h">BORT OPS</h2>
+    <p class="pitch">Run the BORT rail system through a full service day.</p>
+    <ul>
+      <li>Set how many trains and cars run on each line</li>
+      <li>Keep commute crowds moving when stations fill up</li>
+      <li>Balance fares and service against the budget</li>
+    </ul>
+    <div class="go"><a class="play" href="/bort/" onclick="va('event',{name:'Chose sim',data:{sim:'BORT OPS'}})">Play BORT OPS</a></div>
+  </section>
+  <section class="sim port" aria-labelledby="port-h">
+    <svg class="scene" viewBox="0 0 600 250" role="img" aria-label="Container cranes working a ship at the Port of New Oakland">
+      <defs><linearGradient id="psky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#274a66"/><stop offset=".75" stop-color="#b56b4a"/><stop offset="1" stop-color="#e2a15a"/></linearGradient></defs>
+      <rect width="600" height="250" fill="url(#psky)"/>
+      <rect y="206" width="600" height="44" fill="#123146"/>
+      <path d="M0 214 H600" stroke="#e2a15a" stroke-width="2" opacity=".35"/>
+      <path d="M150 170 H590 L570 212 H168Z" fill="#8d2f25"/>
+      <g stroke="#10263a" stroke-width="1.2">
+        <rect x="190" y="146" width="36" height="24" fill="#3f7fa8"/><rect x="226" y="146" width="36" height="24" fill="#c24a3a"/><rect x="262" y="146" width="36" height="24" fill="#d9a72a"/>
+        <rect x="190" y="122" width="36" height="24" fill="#6b7f45"/><rect x="226" y="122" width="36" height="24" fill="#3f7fa8"/>
+        <rect x="334" y="146" width="36" height="24" fill="#c24a3a"/><rect x="370" y="146" width="36" height="24" fill="#48586a"/><rect x="406" y="146" width="36" height="24" fill="#3f7fa8"/><rect x="442" y="146" width="36" height="24" fill="#d9a72a"/>
+        <rect x="370" y="122" width="36" height="24" fill="#d9a72a"/><rect x="406" y="122" width="36" height="24" fill="#6b7f45"/><rect x="442" y="122" width="36" height="24" fill="#c24a3a"/>
+      </g>
+      <rect x="500" y="96" width="46" height="74" fill="#e9ecee"/><g fill="#2d4a5e"><rect x="506" y="104" width="34" height="6"/><rect x="506" y="116" width="34" height="6"/></g>
+      <g stroke="#f2b705" stroke-width="7" stroke-linecap="square" fill="none">
+        <path d="M60 206 V60 M108 206 V60 M60 60 H108 M60 130 H108"/><path d="M20 60 H360"/><path d="M84 60 L84 28 L360 60 M84 28 L20 60"/>
+      </g>
+      <rect x="18" y="64" width="46" height="22" fill="#e9ecee"/>
+      <rect x="296" y="62" width="30" height="12" fill="#e9ecee"/>
+      <g stroke="#10263a" stroke-width="1.6"><line class="rope" x1="303" y1="74" x2="303" y2="110"/><line class="rope" x1="319" y1="74" x2="319" y2="110"/></g>
+      <g class="lift"><rect x="290" y="110" width="42" height="5" fill="#f2b705"/><rect x="292" y="115" width="38" height="24" fill="#3f7fa8" stroke="#10263a" stroke-width="1.2"/></g>
+      <g stroke="#c9a23a" stroke-width="4" fill="none" opacity=".55"><path d="M440 206 V110 M468 206 V110 M440 110 H468 M410 110 H600"/></g>
+    </svg>
+    <h2 id="port-h">Port New Oakland</h2>
+    <p class="pitch">Run a ship-to-shore container crane, 174 feet over the Oakland waterfront.</p>
+    <ul>
+      <li>Plan the stow, then work every box yourself</li>
+      <li>Land 40-foot containers through wind and swing</li>
+      <li>Finish before the ship's sailing time</li>
+    </ul>
+    <p class="note">Keyboard or touch. Turn phones sideways.</p>
+    <div class="go"><a class="play" id="port-play" href="/port/" onclick="va('event',{name:'Chose sim',data:{sim:'Port New Oakland'}})">Play Port New Oakland</a></div>
+  </section>
+  <section class="sim gate" aria-labelledby="gate-h">
+    <svg class="scene" viewBox="0 0 600 250" role="img" aria-label="A small plane flying under the Golden Gate Bridge at sunset as fog rolls in">
+      <defs>
+        <linearGradient id="gsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e3354"/><stop offset=".5" stop-color="#5b4a6e"/><stop offset=".8" stop-color="#c9714f"/><stop offset="1" stop-color="#f0b45e"/></linearGradient>
+        <radialGradient id="gsun" cx="300" cy="200" r="150" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffe2a0" stop-opacity=".9"/><stop offset=".22" stop-color="#ffc26b" stop-opacity=".45"/><stop offset="1" stop-color="#ffc26b" stop-opacity="0"/></radialGradient>
+        <linearGradient id="gsea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3e5a"/><stop offset="1" stop-color="#11263a"/></linearGradient>
+      </defs>
+      <rect width="600" height="250" fill="url(#gsky)"/>
+      <rect width="600" height="250" fill="url(#gsun)"/>
+      <circle cx="300" cy="201" r="21" fill="#ffe3a3"/>
+      <rect y="206" width="600" height="44" fill="url(#gsea)"/>
+      <g stroke="#ffd37f" stroke-linecap="round" stroke-width="2"><path d="M277 212H323" opacity=".6"/><path d="M284 219H316" opacity=".45"/><path d="M272 226H328" opacity=".35"/><path d="M288 234H312" opacity=".25"/><path d="M276 242H324" opacity=".18"/></g>
+      <path d="M600 206V116C584 118 568 128 552 138C536 148 522 160 508 172C496 182 486 196 478 206Z" fill="#26283c"/>
+      <path d="M0 206V168C22 166 42 174 62 180C78 186 90 196 98 206Z" fill="#22263a"/>
+      <g fill="#c0402b"><rect x="170" y="34" width="7" height="178"/><rect x="183" y="34" width="7" height="178"/><rect x="168" y="31" width="24" height="7" rx="1"/><rect x="170" y="62" width="20" height="4"/><rect x="170" y="90" width="20" height="4"/><rect x="170" y="118" width="20" height="4"/><rect x="410" y="34" width="7" height="178"/><rect x="423" y="34" width="7" height="178"/><rect x="408" y="31" width="24" height="7" rx="1"/><rect x="410" y="62" width="20" height="4"/><rect x="410" y="90" width="20" height="4"/><rect x="410" y="118" width="20" height="4"/></g>
+      <g stroke="#c0402b" stroke-width="2.2"><path d="M176 162L184 200M184 162L176 200"/><path d="M416 162L424 200M424 162L416 200"/></g>
+      <g fill="#3a3446"><rect x="164" y="203" width="32" height="9" rx="3"/><rect x="404" y="203" width="32" height="9" rx="3"/></g>
+      <g fill="none" stroke="#c84a32" stroke-linecap="round">
+        <path d="M86 138.6V150 M96 131.7V150 M106 124V150 M116 115.5V150 M126 106V150 M136 95.5V150 M146 84V150 M156 71.4V150 M166 57.6V150 M200 69.6V150 M210 84.1V150 M220 97.1V150 M230 108.6V150 M240 118.5V150 M250 126.9V150 M260 133.8V150 M270 139.1V150 M280 142.9V150 M290 145.2V150 M310 145.2V150 M320 142.9V150 M330 139.1V150 M340 133.8V150 M350 126.9V150 M360 118.5V150 M370 108.6V150 M380 97.1V150 M390 84.1V150 M400 69.6V150 M440 66V150 M450 79.1V150 M460 91.1V150 M470 101.9V150 M480 111.8V150 M490 120.7V150 M500 128.7V150 M510 135.9V150 M520 142.3V150" stroke-width=".9" opacity=".75"/>
+        <path d="M66 150Q130 118 180 36Q300 256 420 36Q470 118 534 150" stroke-width="2.4"/>
+      </g>
+      <rect y="150" width="600" height="6" fill="#b63c29"/>
+      <rect y="156" width="600" height="3" fill="#8f3022"/>
+      <g fill="#ff5a4a"><circle cx="180" cy="29" r="1.6"/><circle cx="420" cy="29" r="1.6"/></g>
+      <path d="M0 206V180C16 172 32 178 46 174C62 168 80 175 96 171C116 166 134 176 150 174C170 172 186 181 204 183C222 185 238 194 252 198C262 201 270 204 276 206Z" fill="#e8edf0" opacity=".42"/>
+      <path d="M0 206V190C24 184 46 190 70 186C96 182 120 190 146 189C172 188 196 194 222 197C246 200 268 203 292 206Z" fill="#e8edf0" opacity=".3"/>
+      <g class="plane">
+        <g transform="translate(287 181) scale(1.15)" fill="#1b1d2b">
+          <path d="M0 0Q0-2.4 3-2.6L10-3L24-1.6L28-1.2L28 .6L24 .6L10 1.6L3 1.6Q0 1.6 0 0Z"/>
+          <path d="M6.5-3.6H17.5V-2.5H6.5Z"/><path d="M22-1.6L25.6-7.2H28.4L28-1.2Z"/><path d="M23-.5H30.4V.6H23Z"/>
+          <g stroke="#1b1d2b" stroke-width=".8" fill="none"><path d="M10 1.2L14-2.6M7.6 1.6L7 4M16.2 1.2L16.4 3.8"/><path d="M-.6-3.4V3.4" opacity=".55"/></g>
+          <circle cx="7" cy="4.6" r="1.1"/><circle cx="16.4" cy="4.4" r="1.1"/>
+        </g>
+      </g>
+    </svg>
+    <h2 id="gate-h">Can You Fly Under the Golden Gate?</h2>
+    <p class="pitch">Take off over Alcatraz and thread the 4,200&#8209;foot main span, 220 feet above the water.</p>
+    <ul>
+      <li>Pick a Cessna 152, a B-24 or a Boeing 747</li>
+      <li>Fly through fog, a golden sunset, city lights or a storm</li>
+      <li>Miss the ships, the swells and the deck</li>
+    </ul>
+    <p class="note">Keyboard, gamepad or touch. Turn phones sideways.</p>
+    <div class="go"><a class="play" id="gate-play" href="/gate/" onclick="va('event',{name:'Chose sim',data:{sim:'Golden Gate'}})">Play Golden Gate</a></div>
+  </section>
+  <section class="sim lab" aria-labelledby="lab-h">
+    <svg class="scene" viewBox="0 0 600 250" role="img" aria-label="An atmospheric river coming ashore: rain on the coast hills, a dry valley, snow on the Sierra">
+      <defs>
+        <linearGradient id="lsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1a2f"/><stop offset="1" stop-color="#1d4058"/></linearGradient>
+        <linearGradient id="lsea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16566f"/><stop offset="1" stop-color="#0b2a3c"/></linearGradient>
+        <linearGradient id="lland" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b4860"/><stop offset=".6" stop-color="#1a2d3d"/><stop offset="1" stop-color="#122230"/></linearGradient>
+      </defs>
+      <rect width="600" height="250" fill="url(#lsky)"/>
+      <g class="river">
+        <path d="M-94.5 66.7 -82.0 68.0 -69.5 69.3 -57.1 70.5 -44.6 71.4 -32.1 72.2 -19.5 72.9 -7.0 73.6 5.6 74.3 18.1 75.2 30.6 76.4 43.1 78.0 55.5 79.8 67.8 82.1 80.0 84.6 92.2 87.3 104.3 90.2 116.5 93.1 128.6 96.1 140.8 99.0 153.0 102.0 165.2 104.9 177.5 107.9 189.8 111.0 202.0 114.2 214.2 117.5 226.4 121.1 238.6 124.8 250.8 128.6 253.2 123.4 242.2 116.7 231.1 110.3 219.9 103.9 208.7 97.7 197.4 91.5 186.0 85.5 174.5 79.6 162.9 74.0 151.2 68.6 139.4 63.5 127.4 58.7 115.3 54.1 103.2 49.7 91.0 45.4 78.8 41.2 66.5 37.0 54.2 32.7 41.9 28.3 29.6 23.8 17.2 19.3 4.7 14.9 -7.8 10.7 -20.5 6.8 -33.3 3.3 -46.2 0.2 -59.2 -2.5 -72.3 -4.8 -85.5 -6.7Z" fill="#ffe066" opacity=".3"/>
+        <path d="M-93.2 56.4 -80.7 57.9 -68.1 59.3 -55.6 60.6 -43.0 61.9 -30.5 63.1 -17.9 64.2 -5.3 65.4 7.2 66.6 19.7 68.0 32.2 69.7 44.6 71.6 57.0 73.8 69.3 76.3 81.5 79.1 93.7 82.0 105.9 85.1 118.0 88.3 130.1 91.5 142.3 94.8 154.4 98.0 166.5 101.4 178.7 104.7 190.8 108.2 202.9 111.9 215.0 115.6 227.1 119.6 239.1 123.7 251.2 127.8 252.8 124.2 241.7 117.9 230.4 111.8 219.1 105.8 207.7 100.0 196.3 94.2 184.8 88.6 173.2 83.1 161.5 77.9 149.7 72.8 137.9 68.0 125.9 63.5 113.8 59.1 101.7 55.0 89.5 50.9 77.2 46.9 64.9 43.0 52.7 39.0 40.3 35.0 28.0 31.0 15.6 27.0 3.1 23.1 -9.5 19.4 -22.1 16.0 -34.9 12.8 -47.7 10.0 -60.7 7.6 -73.7 5.4 -86.8 3.6Z" fill="#ffb347" opacity=".42"/>
+        <path d="M-92.1 46.9 -79.4 48.4 -66.8 49.9 -54.1 51.5 -41.5 53.0 -29.0 54.6 -16.4 56.1 -3.8 57.7 8.7 59.5 21.2 61.4 33.7 63.4 46.1 65.7 58.4 68.3 70.7 71.0 83.0 74.0 95.2 77.1 107.3 80.4 119.4 83.8 131.5 87.3 143.6 90.8 155.7 94.4 167.7 98.1 179.8 101.8 191.8 105.7 203.8 109.7 215.8 113.9 227.7 118.2 239.6 122.6 251.5 127.2 252.5 124.8 241.2 118.9 229.8 113.2 218.4 107.6 206.9 102.1 195.3 96.8 183.7 91.5 172.0 86.4 160.2 81.5 148.4 76.8 136.5 72.3 124.4 68.0 112.4 63.8 100.2 59.8 88.0 56.0 75.8 52.2 63.5 48.5 51.2 44.9 38.9 41.3 26.5 37.7 14.1 34.2 1.6 30.8 -11.0 27.5 -23.6 24.5 -36.3 21.7 -49.1 19.1 -62.0 16.9 -74.9 14.9 -87.9 13.1Z" fill="#ff7b54" opacity=".55"/>
+        <path d="M-91.0 38.1 -78.2 39.6 -65.5 41.3 -52.8 43.0 -40.2 44.8 -27.6 46.7 -15.0 48.7 -2.4 50.7 10.1 52.9 22.6 55.2 35.0 57.6 47.4 60.3 59.8 63.1 72.1 66.1 84.3 69.3 96.5 72.6 108.6 76.1 120.7 79.7 132.8 83.4 144.9 87.2 156.9 91.0 168.9 95.0 180.8 99.1 192.7 103.4 204.6 107.7 216.5 112.2 228.3 116.9 240.0 121.7 251.7 126.6 252.3 125.4 240.8 119.9 229.3 114.5 217.7 109.2 206.1 104.1 194.4 99.1 182.7 94.2 170.9 89.5 159.0 84.9 147.1 80.5 135.2 76.2 123.1 72.1 111.0 68.2 98.9 64.4 86.7 60.7 74.5 57.1 62.2 53.7 49.9 50.3 37.5 47.0 25.1 43.9 12.7 40.8 0.2 37.8 -12.4 35.0 -25.0 32.3 -37.7 29.8 -50.4 27.6 -63.2 25.5 -76.1 23.6 -89.0 21.9Z" fill="#ff4d8d" opacity=".72"/>
+      </g>
+      <g fill="#93a8be">
+        <path d="M176 128C176 118 188 112 198 116C202 104 220 102 228 112C236 104 254 106 258 118C270 116 282 124 280 134C280 140 274 142 268 142H186C178 142 176 136 176 128Z" opacity=".95"/>
+        <path d="M232 140C232 133 240 129 247 131C251 123 264 122 269 130C276 127 288 131 287 140C287 144 283 146 279 146H238C234 146 232 143 232 140Z" opacity=".8"/>
+        <path d="M444 76C444 66 456 60 466 64C472 52 492 50 500 62C510 54 530 58 532 70C544 68 556 76 554 86C554 92 548 94 542 94H454C446 94 444 86 444 76Z" opacity=".85"/>
+      </g>
+      <g class="rain">
+        <g stroke="#7fe3ff" stroke-width="1.6" stroke-linecap="round" opacity=".75"><path d="M190 147l-4 12M202 149l-4 12M214 146l-4 12M226 149l-4 12M238 147l-4 12M250 151l-4 12M262 152l-4 12M274 151l-4 12M196 165l-4 11M208 167l-4 11M220 164l-4 11M232 167l-4 11M244 167l-4 11M256 169l-4 11M268 169l-4 11M280 168l-4 11"/></g>
+        <g fill="#eef5ff"><circle cx="462" cy="102" r="1.7"/><circle cx="476" cy="110" r="1.7"/><circle cx="490" cy="100" r="1.7"/><circle cx="504" cy="108" r="1.7"/><circle cx="518" cy="99" r="1.7"/><circle cx="532" cy="106" r="1.7"/><circle cx="470" cy="118" r="1.5"/><circle cx="484" cy="124" r="1.5"/><circle cx="498" cy="118" r="1.5"/><circle cx="512" cy="112" r="1.5"/><circle cx="545" cy="100" r="1.5"/></g>
+      </g>
+      <path d="M140 250V206L160 202L174 191L190 172L205 160L220 166L236 152L252 160L268 176L286 190L302 198L396 200L412 193L432 182L452 168L472 148L492 126L512 104L528 87L540 79L552 85L566 96L582 104L600 108V250Z" fill="url(#lland)" stroke="#3d5d76" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M498 120L512 104L528 87L540 79L552 85L566 96L577 102L566 104L552 97L540 95L528 101L514 113Z" fill="#eef5ff" opacity=".92"/>
+      <ellipse cx="426" cy="187" rx="13" ry="3.2" fill="#2f86a8"/>
+      <path d="M413.5 181.5V190" stroke="#cfd8dd" stroke-width="2.2"/>
+      <rect y="202" width="196" height="48" fill="url(#lsea)"/>
+      <g stroke="#7fe3ff" stroke-width="1.4" stroke-linecap="round" opacity=".35"><path d="M14 214H44M70 222H96M24 232H58M112 214H140M90 240H120M150 228H178"/></g>
+      <path d="M0 202V188C18 182 36 186 54 182C74 178 96 186 116 182C136 178 156 186 170 190C178 192 184 196 190 202Z" fill="#eef2f7" opacity=".42"/>
+      <path d="M118 202C136 194 152 192 168 194C180 195 186 192 192 188C198 192 204 197 206 202Z" fill="#eef2f7" opacity=".28"/>
+    </svg>
+    <h2 id="lab-h">Upstream</h2>
+    <p class="pitch">Set the Pacific's drivers and watch the Bay Area's fog, storms and snowpack answer.</p>
+    <ul>
+      <li>Warm the ocean, wake El Niño or stall an atmospheric river</li>
+      <li>Replay 1862, 1997, 2017 or 2023, then change them</li>
+      <li>Chase snow on Diablo or fog in Walnut Creek</li>
+    </ul>
+    <p class="note">Real terrain and NOAA climate normals.</p>
+    <div class="go"><a class="play" id="lab-play" href="/upstream/" onclick="va('event',{name:'Chose sim',data:{sim:'Upstream'}})">Play Upstream</a></div>
+  </section>
+</main>
+<footer>BORT and New Oakland are made up. The operating numbers try hard not to be.</footer>
+<script>
+/* same site, same saved data: greet returning crane operators by callsign */
+try{const s=JSON.parse(localStorage.getItem('pno.save.v1')||'null');if(s&&s.callsign){document.getElementById('port-play').textContent='Continue as '+s.callsign;}}catch(e){}
+/* and pilots by their best score under the Golden Gate */
+try{const b=JSON.parse(localStorage.getItem('gg-best')||'null');const top=b?Math.max(0,...Object.values(b).filter(v=>typeof v==='number'&&isFinite(v))):0;if(top>0){document.getElementById('gate-play').textContent='Beat your best: '+Math.round(top).toLocaleString('en-US');}}catch(e){}
+</script>
+</body>
+</html>
